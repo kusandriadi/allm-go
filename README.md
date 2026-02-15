@@ -120,6 +120,25 @@ resp, _ := client.Chat(ctx, []allm.Message{
 })
 ```
 
+### Embeddings
+
+```go
+// OpenAI and Local providers support embeddings
+client := allm.New(
+    provider.OpenAI(""),
+    allm.WithEmbeddingModel(provider.OpenAITextEmbedding3Small),
+)
+
+resp, _ := client.Embed(ctx, "Hello world")
+fmt.Println(resp.Embeddings[0]) // []float64 vector
+
+// Batch embedding
+resp, _ = client.Embed(ctx, "Hello", "World", "Foo")
+// resp.Embeddings has 3 vectors
+```
+
+Supported by: OpenAI, Local (Ollama/vLLM). Not supported by: Anthropic, DeepSeek.
+
 ### Switch Model at Runtime
 
 ```go
@@ -156,6 +175,10 @@ provider.OpenAIO4Mini             // o4-mini
 // DeepSeek
 provider.DeepSeekChat             // deepseek-chat
 provider.DeepSeekReasoner         // deepseek-reasoner
+
+// Embedding Models
+provider.OpenAITextEmbedding3Small  // text-embedding-3-small
+provider.OpenAITextEmbedding3Large  // text-embedding-3-large
 ```
 
 ## Client Options
@@ -165,9 +188,12 @@ client := allm.New(p,
     allm.WithModel(provider.AnthropicClaudeSonnet4_5),
     allm.WithMaxTokens(8192),
     allm.WithTemperature(0.7),
+    allm.WithPresencePenalty(0.1),          // -2.0 to 2.0
+    allm.WithFrequencyPenalty(0.1),         // -2.0 to 2.0
     allm.WithTimeout(30 * time.Second),    // default: 60s
     allm.WithMaxInputLen(200000),           // default: 100KB
     allm.WithSystemPrompt("Be helpful."),
+    allm.WithEmbeddingModel(provider.OpenAITextEmbedding3Small),
 )
 ```
 
@@ -194,13 +220,17 @@ func TestMyService(t *testing.T) {
 }
 ```
 
-Mock errors and streaming:
+Mock errors, streaming, and embeddings:
 
 ```go
 mock := allmtest.NewMockProvider("test", allmtest.WithError(errors.New("api down")))
 
 mock := allmtest.NewMockProvider("test", allmtest.WithStreamChunks([]allm.StreamChunk{
     {Content: "Hello"}, {Content: " world"}, {Done: true},
+}))
+
+mock := allmtest.NewMockProvider("test", allmtest.WithEmbedResponse(&allm.EmbedResponse{
+    Embeddings: [][]float64{{0.1, 0.2, 0.3}},
 }))
 ```
 
@@ -227,6 +257,7 @@ if err != nil {
 | `Chat(ctx, messages)` | Multi-turn conversation |
 | `Stream(ctx, messages)` | Streaming via channel |
 | `StreamToWriter(ctx, messages, w)` | Stream to `io.Writer` |
+| `Embed(ctx, texts...)` | Generate embeddings |
 | `Models(ctx)` | List available models |
 | `SetModel(m)` | Switch model |
 | `SetProvider(p)` | Switch provider |

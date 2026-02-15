@@ -69,7 +69,6 @@ func OpenAI(apiKey string, opts ...OpenAIOption) *OpenAIProvider {
 		opt(p)
 	}
 
-	// Create client once for connection reuse
 	p.client = p.buildClient()
 
 	return p
@@ -85,13 +84,10 @@ func (p *OpenAIProvider) Available() bool {
 	return p.apiKey != ""
 }
 
-// Complete sends a completion request.
-func (p *OpenAIProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
-	start := time.Now()
-
+// buildChatParams builds ChatCompletionNewParams from an allm.Request.
+func (p *OpenAIProvider) buildChatParams(req *allm.Request) openai.ChatCompletionNewParams {
 	messages := p.convertMessages(req.Messages)
 
-	// Resolve model: request > provider default
 	model := p.model
 	if req.Model != "" {
 		model = req.Model
@@ -120,7 +116,31 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *allm.Request) (*allm
 		params.TopP = openai.Float(req.TopP)
 	}
 
-	// Stop sequences handled via SDK's native interface if supported
+	if req.PresencePenalty != 0 {
+		params.PresencePenalty = openai.Float(req.PresencePenalty)
+	}
+
+	if req.FrequencyPenalty != 0 {
+		params.FrequencyPenalty = openai.Float(req.FrequencyPenalty)
+	}
+
+	if len(req.Stop) > 0 {
+		params.Stop = openai.ChatCompletionNewParamsStopUnion{OfStringArray: req.Stop}
+	}
+
+	return params
+}
+
+// Complete sends a completion request.
+func (p *OpenAIProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
+	start := time.Now()
+
+	params := p.buildChatParams(req)
+
+	model := p.model
+	if req.Model != "" {
+		model = req.Model
+	}
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
@@ -163,22 +183,66 @@ func (p *OpenAIProvider) Models(ctx context.Context) ([]allm.Model, error) {
 	return models, nil
 }
 
-// Stream sends a streaming request.
-// Note: Streaming falls back to non-streaming for simplicity.
-// For true streaming, use the SDK directly.
+// Embed generates embeddings using the OpenAI Embeddings API.
+func (p *OpenAIProvider) Embed(ctx context.Context, req *allm.EmbedRequest) (*allm.EmbedResponse, error) {
+	start := time.Now()
+
+	model := "text-embedding-3-small"
+	if req.Model != "" {
+		model = req.Model
+	}
+
+	resp, err := p.client.Embeddings.New(ctx, openai.EmbeddingNewParams{
+		Input: openai.EmbeddingNewParamsInputUnion{
+			OfArrayOfStrings: req.Input,
+		},
+		Model: openai.EmbeddingModel(model),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	embeddings := make([][]float64, len(resp.Data))
+	for i, e := range resp.Data {
+		embeddings[i] = e.Embedding
+	}
+
+	return &allm.EmbedResponse{
+		Embeddings:  embeddings,
+		Model:       model,
+		Provider:    "openai",
+		InputTokens: int(resp.Usage.TotalTokens),
+		Latency:     time.Since(start),
+	}, nil
+}
+
+// Stream sends a real streaming request using the OpenAI SDK.
 func (p *OpenAIProvider) Stream(ctx context.Context, req *allm.Request) <-chan allm.StreamChunk {
 	out := make(chan allm.StreamChunk)
 
 	go func() {
 		defer close(out)
 
-		resp, err := p.Complete(ctx, req)
-		if err != nil {
+		params := p.buildChatParams(req)
+
+		stream := p.client.Chat.Completions.NewStreaming(ctx, params)
+		defer stream.Close()
+
+		for stream.Next() {
+			chunk := stream.Current()
+			if len(chunk.Choices) > 0 {
+				content := chunk.Choices[0].Delta.Content
+				if content != "" {
+					out <- allm.StreamChunk{Content: content}
+				}
+			}
+		}
+
+		if err := stream.Err(); err != nil {
 			out <- allm.StreamChunk{Error: err}
 			return
 		}
 
-		out <- allm.StreamChunk{Content: resp.Content}
 		out <- allm.StreamChunk{Done: true}
 	}()
 

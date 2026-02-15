@@ -60,7 +60,6 @@ func DeepSeek(apiKey string, opts ...DeepSeekOption) *DeepSeekProvider {
 		opt(p)
 	}
 
-	// Create client once for connection reuse
 	p.client = openai.NewClient(
 		option.WithAPIKey(p.apiKey),
 		option.WithBaseURL("https://api.deepseek.com/v1"),
@@ -79,13 +78,10 @@ func (p *DeepSeekProvider) Available() bool {
 	return p.apiKey != ""
 }
 
-// Complete sends a completion request.
-func (p *DeepSeekProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
-	start := time.Now()
-
+// buildChatParams builds ChatCompletionNewParams from an allm.Request.
+func (p *DeepSeekProvider) buildChatParams(req *allm.Request) openai.ChatCompletionNewParams {
 	messages := convertToOpenAI(req.Messages)
 
-	// Resolve model: request > provider default
 	model := p.model
 	if req.Model != "" {
 		model = req.Model
@@ -108,6 +104,28 @@ func (p *DeepSeekProvider) Complete(ctx context.Context, req *allm.Request) (*al
 	}
 	if temp > 0 {
 		params.Temperature = openai.Float(temp)
+	}
+
+	if req.PresencePenalty != 0 {
+		params.PresencePenalty = openai.Float(req.PresencePenalty)
+	}
+
+	if req.FrequencyPenalty != 0 {
+		params.FrequencyPenalty = openai.Float(req.FrequencyPenalty)
+	}
+
+	return params
+}
+
+// Complete sends a completion request.
+func (p *DeepSeekProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
+	start := time.Now()
+
+	params := p.buildChatParams(req)
+
+	model := p.model
+	if req.Model != "" {
+		model = req.Model
 	}
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)
@@ -151,21 +169,33 @@ func (p *DeepSeekProvider) Models(ctx context.Context) ([]allm.Model, error) {
 	return models, nil
 }
 
-// Stream sends a streaming request.
-// Note: Streaming falls back to non-streaming for simplicity.
+// Stream sends a real streaming request using the OpenAI-compatible SDK.
 func (p *DeepSeekProvider) Stream(ctx context.Context, req *allm.Request) <-chan allm.StreamChunk {
 	out := make(chan allm.StreamChunk)
 
 	go func() {
 		defer close(out)
 
-		resp, err := p.Complete(ctx, req)
-		if err != nil {
+		params := p.buildChatParams(req)
+
+		stream := p.client.Chat.Completions.NewStreaming(ctx, params)
+		defer stream.Close()
+
+		for stream.Next() {
+			chunk := stream.Current()
+			if len(chunk.Choices) > 0 {
+				content := chunk.Choices[0].Delta.Content
+				if content != "" {
+					out <- allm.StreamChunk{Content: content}
+				}
+			}
+		}
+
+		if err := stream.Err(); err != nil {
 			out <- allm.StreamChunk{Error: err}
 			return
 		}
 
-		out <- allm.StreamChunk{Content: resp.Content}
 		out <- allm.StreamChunk{Done: true}
 	}()
 

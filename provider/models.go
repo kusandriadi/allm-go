@@ -71,3 +71,13 @@ const (
 	// DeepSeek Reasoner (V3) - Chain-of-thought reasoning
 	DeepSeekReasoner = "deepseek-reasoner"
 )
+
+// OpenAI Embedding models.
+const (
+	// Text Embedding 3 Small - Fast and cost-effective
+	OpenAITextEmbedding3Small = "text-embedding-3-small"
+	// Text Embedding 3 Large - Higher quality
+	OpenAITextEmbedding3Large = "text-embedding-3-large"
+	// Text Embedding Ada 002 (legacy)
+	OpenAITextEmbeddingAda002 = "text-embedding-ada-002"
+)

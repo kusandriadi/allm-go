@@ -755,6 +755,163 @@ func TestConcurrentStream(t *testing.T) {
 	wg.Wait()
 }
 
+// --- Embed tests ---
+
+// mockEmbedder implements both Provider and Embedder
+type mockEmbedder struct {
+	mockProvider
+	embedResp *EmbedResponse
+}
+
+func (m *mockEmbedder) Embed(_ context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.embedResp, nil
+}
+
+func TestEmbedSupported(t *testing.T) {
+	p := &mockEmbedder{
+		mockProvider: mockProvider{name: "test", available: true},
+		embedResp: &EmbedResponse{
+			Embeddings: [][]float64{{0.1, 0.2, 0.3}},
+			Model:      "embed-model",
+			Provider:   "test",
+		},
+	}
+	c := New(p)
+
+	resp, err := c.Embed(context.Background(), "Hello")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Embeddings) != 1 {
+		t.Fatalf("expected 1 embedding, got %d", len(resp.Embeddings))
+	}
+	if resp.Embeddings[0][0] != 0.1 {
+		t.Errorf("expected 0.1, got %f", resp.Embeddings[0][0])
+	}
+}
+
+func TestEmbedMultipleInputs(t *testing.T) {
+	p := &mockEmbedder{
+		mockProvider: mockProvider{name: "test", available: true},
+		embedResp: &EmbedResponse{
+			Embeddings: [][]float64{{0.1}, {0.2}},
+			Model:      "embed-model",
+			Provider:   "test",
+		},
+	}
+	c := New(p)
+
+	resp, err := c.Embed(context.Background(), "Hello", "World")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Embeddings) != 2 {
+		t.Fatalf("expected 2 embeddings, got %d", len(resp.Embeddings))
+	}
+}
+
+func TestEmbedNotSupported(t *testing.T) {
+	p := &mockProvider{name: "test", available: true}
+	c := New(p)
+
+	_, err := c.Embed(context.Background(), "Hello")
+	if err == nil {
+		t.Fatal("expected error for provider without Embedder")
+	}
+	if !strings.Contains(err.Error(), "does not support embeddings") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestEmbedNoProvider(t *testing.T) {
+	c := &Client{}
+	_, err := c.Embed(context.Background(), "Hello")
+	if !errors.Is(err, ErrNoProvider) {
+		t.Errorf("expected ErrNoProvider, got %v", err)
+	}
+}
+
+func TestEmbedEmptyInput(t *testing.T) {
+	p := &mockEmbedder{
+		mockProvider: mockProvider{name: "test", available: true},
+	}
+	c := New(p)
+
+	_, err := c.Embed(context.Background())
+	if !errors.Is(err, ErrEmptyInput) {
+		t.Errorf("expected ErrEmptyInput, got %v", err)
+	}
+}
+
+func TestEmbedModelFlowsToRequest(t *testing.T) {
+	p := &mockEmbedder{
+		mockProvider: mockProvider{name: "test", available: true},
+		embedResp: &EmbedResponse{
+			Embeddings: [][]float64{{0.1}},
+			Model:      "custom-embed",
+			Provider:   "test",
+		},
+	}
+	c := New(p, WithEmbeddingModel("custom-embed"))
+
+	resp, err := c.Embed(context.Background(), "Hello")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Model != "custom-embed" {
+		t.Errorf("expected custom-embed model, got %q", resp.Model)
+	}
+}
+
+// --- Penalty params tests ---
+
+func TestPenaltyParamsFlowToRequest(t *testing.T) {
+	p := &mockProvider{name: "test", available: true, response: &Response{Content: "OK"}}
+	c := New(p, WithPresencePenalty(0.5), WithFrequencyPenalty(0.3))
+
+	c.Complete(context.Background(), "Hi")
+
+	req := p.getLastReq()
+	if req == nil {
+		t.Fatal("expected request to be captured")
+	}
+	if req.PresencePenalty != 0.5 {
+		t.Errorf("expected presence_penalty 0.5, got %f", req.PresencePenalty)
+	}
+	if req.FrequencyPenalty != 0.3 {
+		t.Errorf("expected frequency_penalty 0.3, got %f", req.FrequencyPenalty)
+	}
+}
+
+func TestPenaltyParamsInStream(t *testing.T) {
+	p := &mockProvider{
+		name: "test", available: true,
+		chunks: []StreamChunk{{Content: "OK"}, {Done: true}},
+	}
+	c := New(p, WithPresencePenalty(0.8), WithFrequencyPenalty(0.2))
+
+	for range c.Stream(context.Background(), []Message{
+		{Role: RoleUser, Content: "Hi"},
+	}) {
+	}
+
+	req := p.getLastReq()
+	if req == nil {
+		t.Fatal("expected request to be captured")
+	}
+	if req.PresencePenalty != 0.8 {
+		t.Errorf("expected presence_penalty 0.8, got %f", req.PresencePenalty)
+	}
+	if req.FrequencyPenalty != 0.2 {
+		t.Errorf("expected frequency_penalty 0.2, got %f", req.FrequencyPenalty)
+	}
+}
+
 // --- Error sentinel tests ---
 
 func TestErrorSentinels(t *testing.T) {

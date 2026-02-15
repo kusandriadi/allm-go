@@ -91,11 +91,8 @@ func (p *AnthropicProvider) Available() bool {
 	return p.apiKey != ""
 }
 
-// Complete sends a completion request.
-func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
-	start := time.Now()
-
-	// Convert messages
+// buildParams builds MessageNewParams from an allm.Request.
+func (p *AnthropicProvider) buildParams(req *allm.Request) (anthropic.MessageNewParams, error) {
 	var systemBlocks []anthropic.TextBlockParam
 	var messages []anthropic.MessageParam
 
@@ -107,12 +104,10 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*a
 
 		var parts []anthropic.ContentBlockParamUnion
 
-		// Add text content
 		if m.Content != "" {
 			parts = append(parts, anthropic.NewTextBlock(m.Content))
 		}
 
-		// Add images
 		for _, img := range m.Images {
 			data := base64.StdEncoding.EncodeToString(img.Data)
 			parts = append(parts, anthropic.NewImageBlockBase64(img.MimeType, data))
@@ -126,13 +121,11 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*a
 		}
 	}
 
-	// Resolve model: request > provider default
 	model := p.model
 	if req.Model != "" {
 		model = req.Model
 	}
 
-	// Build params
 	maxTokens := int64(p.maxTokens)
 	if req.MaxTokens > 0 {
 		maxTokens = int64(req.MaxTokens)
@@ -164,13 +157,28 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*a
 		params.StopSequences = req.Stop
 	}
 
-	// Send request
+	return params, nil
+}
+
+// Complete sends a completion request.
+func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
+	start := time.Now()
+
+	params, err := p.buildParams(req)
+	if err != nil {
+		return nil, err
+	}
+
+	model := p.model
+	if req.Model != "" {
+		model = req.Model
+	}
+
 	message, err := p.client.Messages.New(ctx, params)
 	if err != nil {
 		return nil, err
 	}
 
-	// Extract content
 	content := ""
 	if len(message.Content) > 0 {
 		content = message.Content[0].Text
@@ -205,22 +213,35 @@ func (p *AnthropicProvider) Models(ctx context.Context) ([]allm.Model, error) {
 	return models, nil
 }
 
-// Stream sends a streaming request.
-// Note: Streaming falls back to non-streaming for simplicity.
-// For true streaming, use the SDK directly.
+// Stream sends a real streaming request using the Anthropic SDK.
 func (p *AnthropicProvider) Stream(ctx context.Context, req *allm.Request) <-chan allm.StreamChunk {
 	out := make(chan allm.StreamChunk)
 
 	go func() {
 		defer close(out)
 
-		resp, err := p.Complete(ctx, req)
+		params, err := p.buildParams(req)
 		if err != nil {
 			out <- allm.StreamChunk{Error: err}
 			return
 		}
 
-		out <- allm.StreamChunk{Content: resp.Content}
+		stream := p.client.Messages.NewStreaming(ctx, params)
+		defer stream.Close()
+
+		for stream.Next() {
+			event := stream.Current()
+			// content_block_delta events contain text chunks
+			if event.Type == "content_block_delta" && event.Delta.Text != "" {
+				out <- allm.StreamChunk{Content: event.Delta.Text}
+			}
+		}
+
+		if err := stream.Err(); err != nil {
+			out <- allm.StreamChunk{Error: err}
+			return
+		}
+
 		out <- allm.StreamChunk{Done: true}
 	}()
 

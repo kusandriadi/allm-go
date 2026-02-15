@@ -28,15 +28,16 @@ import (
 	"github.com/kusandriadi/allm-go"
 )
 
-// MockProvider implements allm.Provider for testing.
+// MockProvider implements allm.Provider, allm.ModelLister, and allm.Embedder for testing.
 type MockProvider struct {
-	mu       sync.Mutex
-	name     string
-	response *allm.Response
-	err      error
-	chunks   []allm.StreamChunk
-	models   []allm.Model
-	requests []*allm.Request
+	mu            sync.Mutex
+	name          string
+	response      *allm.Response
+	err           error
+	chunks        []allm.StreamChunk
+	models        []allm.Model
+	embedResponse *allm.EmbedResponse
+	requests      []*allm.Request
 }
 
 // MockOption configures the MockProvider.
@@ -67,6 +68,13 @@ func WithStreamChunks(chunks []allm.StreamChunk) MockOption {
 func WithModels(models []allm.Model) MockOption {
 	return func(m *MockProvider) {
 		m.models = models
+	}
+}
+
+// WithEmbedResponse sets the response returned by Embed.
+func WithEmbedResponse(resp *allm.EmbedResponse) MockOption {
+	return func(m *MockProvider) {
+		m.embedResponse = resp
 	}
 }
 
@@ -140,6 +148,30 @@ func (m *MockProvider) Models(_ context.Context) ([]allm.Model, error) {
 		return nil, m.err
 	}
 	return m.models, nil
+}
+
+// Embed returns configured embeddings.
+func (m *MockProvider) Embed(_ context.Context, req *allm.EmbedRequest) (*allm.EmbedResponse, error) {
+	m.mu.Lock()
+	m.requests = append(m.requests, &allm.Request{Model: req.Model})
+	m.mu.Unlock()
+
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.embedResponse != nil {
+		return m.embedResponse, nil
+	}
+	// Default: return zero vectors matching input count
+	embeddings := make([][]float64, len(req.Input))
+	for i := range embeddings {
+		embeddings[i] = make([]float64, 3)
+	}
+	return &allm.EmbedResponse{
+		Embeddings: embeddings,
+		Model:      "mock-embed",
+		Provider:   m.name,
+	}, nil
 }
 
 // LastRequest returns the most recent request, or nil if none.

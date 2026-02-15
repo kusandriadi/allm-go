@@ -74,7 +74,6 @@ func Local(baseURL string, opts ...LocalOption) *LocalProvider {
 		opt(p)
 	}
 
-	// Create client once for connection reuse
 	p.client = p.buildClient()
 
 	return p
@@ -99,18 +98,13 @@ func (p *LocalProvider) Name() string {
 
 // Available checks if the local server is reachable.
 func (p *LocalProvider) Available() bool {
-	// For local servers, we assume available if baseURL is set
-	// Could add a health check here if needed
 	return p.baseURL != ""
 }
 
-// Complete sends a completion request.
-func (p *LocalProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
-	start := time.Now()
-
+// buildChatParams builds ChatCompletionNewParams from an allm.Request.
+func (p *LocalProvider) buildChatParams(req *allm.Request) openai.ChatCompletionNewParams {
 	messages := p.convertMessages(req.Messages)
 
-	// Resolve model: request > provider default
 	model := p.model
 	if req.Model != "" {
 		model = req.Model
@@ -133,6 +127,28 @@ func (p *LocalProvider) Complete(ctx context.Context, req *allm.Request) (*allm.
 	}
 	if temp > 0 {
 		params.Temperature = openai.Float(temp)
+	}
+
+	if req.PresencePenalty != 0 {
+		params.PresencePenalty = openai.Float(req.PresencePenalty)
+	}
+
+	if req.FrequencyPenalty != 0 {
+		params.FrequencyPenalty = openai.Float(req.FrequencyPenalty)
+	}
+
+	return params
+}
+
+// Complete sends a completion request.
+func (p *LocalProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
+	start := time.Now()
+
+	params := p.buildChatParams(req)
+
+	model := p.model
+	if req.Model != "" {
+		model = req.Model
 	}
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)
@@ -176,21 +192,67 @@ func (p *LocalProvider) Models(ctx context.Context) ([]allm.Model, error) {
 	return models, nil
 }
 
-// Stream sends a streaming request.
-// Note: Streaming falls back to non-streaming for simplicity.
+// Embed generates embeddings using the local OpenAI-compatible API.
+// Works with Ollama, vLLM, and other servers that support /v1/embeddings.
+func (p *LocalProvider) Embed(ctx context.Context, req *allm.EmbedRequest) (*allm.EmbedResponse, error) {
+	start := time.Now()
+
+	model := p.model
+	if req.Model != "" {
+		model = req.Model
+	}
+
+	resp, err := p.client.Embeddings.New(ctx, openai.EmbeddingNewParams{
+		Input: openai.EmbeddingNewParamsInputUnion{
+			OfArrayOfStrings: req.Input,
+		},
+		Model: openai.EmbeddingModel(model),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	embeddings := make([][]float64, len(resp.Data))
+	for i, e := range resp.Data {
+		embeddings[i] = e.Embedding
+	}
+
+	return &allm.EmbedResponse{
+		Embeddings:  embeddings,
+		Model:       model,
+		Provider:    "local",
+		InputTokens: int(resp.Usage.TotalTokens),
+		Latency:     time.Since(start),
+	}, nil
+}
+
+// Stream sends a real streaming request using the OpenAI-compatible SDK.
 func (p *LocalProvider) Stream(ctx context.Context, req *allm.Request) <-chan allm.StreamChunk {
 	out := make(chan allm.StreamChunk)
 
 	go func() {
 		defer close(out)
 
-		resp, err := p.Complete(ctx, req)
-		if err != nil {
+		params := p.buildChatParams(req)
+
+		stream := p.client.Chat.Completions.NewStreaming(ctx, params)
+		defer stream.Close()
+
+		for stream.Next() {
+			chunk := stream.Current()
+			if len(chunk.Choices) > 0 {
+				content := chunk.Choices[0].Delta.Content
+				if content != "" {
+					out <- allm.StreamChunk{Content: content}
+				}
+			}
+		}
+
+		if err := stream.Err(); err != nil {
 			out <- allm.StreamChunk{Error: err}
 			return
 		}
 
-		out <- allm.StreamChunk{Content: resp.Content}
 		out <- allm.StreamChunk{Done: true}
 	}()
 
@@ -204,7 +266,6 @@ func (p *LocalProvider) buildClient() openai.Client {
 	if p.apiKey != "" {
 		opts = append(opts, option.WithAPIKey(p.apiKey))
 	} else {
-		// Some servers require a dummy key
 		opts = append(opts, option.WithAPIKey(os.Getenv("LOCAL_API_KEY")))
 	}
 	return openai.NewClient(opts...)

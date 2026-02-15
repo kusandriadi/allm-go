@@ -69,12 +69,14 @@ type Image struct {
 
 // Request contains parameters for an LLM request.
 type Request struct {
-	Messages    []Message
-	Model       string   // Model to use (0 = provider default)
-	MaxTokens   int      // Max tokens to generate (0 = provider default)
-	Temperature float64  // Sampling temperature (0 = provider default)
-	TopP        float64  // Nucleus sampling (0 = provider default)
-	Stop        []string // Stop sequences
+	Messages         []Message
+	Model            string   // Model to use (empty = provider default)
+	MaxTokens        int      // Max tokens to generate (0 = provider default)
+	Temperature      float64  // Sampling temperature (0 = provider default)
+	TopP             float64  // Nucleus sampling (0 = provider default)
+	Stop             []string // Stop sequences
+	PresencePenalty  float64  // Presence penalty (-2.0 to 2.0, 0 = default)
+	FrequencyPenalty float64  // Frequency penalty (-2.0 to 2.0, 0 = default)
 }
 
 // Response contains the LLM response.
@@ -93,6 +95,21 @@ type StreamChunk struct {
 	Content string // Partial content
 	Done    bool   // True if this is the final chunk
 	Error   error  // Non-nil if streaming failed
+}
+
+// EmbedRequest contains parameters for an embedding request.
+type EmbedRequest struct {
+	Input []string // Texts to embed
+	Model string   // Embedding model (empty = provider default)
+}
+
+// EmbedResponse contains the embedding result.
+type EmbedResponse struct {
+	Embeddings  [][]float64   // One embedding vector per input
+	Model       string        // Model used
+	Provider    string        // Provider name
+	InputTokens int           // Total input tokens
+	Latency     time.Duration // Request latency
 }
 
 // Provider is the interface that LLM providers must implement.
@@ -116,6 +133,14 @@ type Provider interface {
 type ModelLister interface {
 	// Models returns the list of available models from the provider.
 	Models(ctx context.Context) ([]Model, error)
+}
+
+// Embedder is an optional interface providers can implement for text embeddings.
+// Supported by: OpenAI, Local (Ollama/vLLM).
+// Not supported by: Anthropic, DeepSeek.
+type Embedder interface {
+	// Embed generates embeddings for the given texts.
+	Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error)
 }
 
 // Model represents an available LLM model.
@@ -173,28 +198,58 @@ func WithTemperature(t float64) Option {
 	}
 }
 
+// WithPresencePenalty sets the default presence penalty.
+// Supported by OpenAI, DeepSeek, and Local providers. Ignored by Anthropic.
+func WithPresencePenalty(p float64) Option {
+	return func(c *Client) {
+		c.presencePenalty = p
+	}
+}
+
+// WithFrequencyPenalty sets the default frequency penalty.
+// Supported by OpenAI, DeepSeek, and Local providers. Ignored by Anthropic.
+func WithFrequencyPenalty(p float64) Option {
+	return func(c *Client) {
+		c.frequencyPenalty = p
+	}
+}
+
+// WithEmbeddingModel sets the default embedding model.
+// This is separate from the chat model set by WithModel.
+func WithEmbeddingModel(model string) Option {
+	return func(c *Client) {
+		c.embeddingModel = model
+	}
+}
+
 // Client is the main interface for interacting with LLMs.
 // It is safe for concurrent use.
 type Client struct {
-	mu           sync.RWMutex
-	provider     Provider
-	timeout      time.Duration
-	maxInputLen  int
-	systemPrompt string
-	model        string  // default model (overrides provider default)
-	maxTokens    int     // default max tokens (overrides provider default)
-	temperature  float64 // default temperature (overrides provider default)
+	mu               sync.RWMutex
+	provider         Provider
+	timeout          time.Duration
+	maxInputLen      int
+	systemPrompt     string
+	model            string  // default chat model
+	maxTokens        int     // default max tokens
+	temperature      float64 // default temperature
+	presencePenalty  float64 // default presence penalty
+	frequencyPenalty float64 // default frequency penalty
+	embeddingModel   string  // default embedding model
 }
 
 // clientState holds a snapshot of client fields for use without holding the lock.
 type clientState struct {
-	provider     Provider
-	timeout      time.Duration
-	maxInputLen  int
-	systemPrompt string
-	model        string
-	maxTokens    int
-	temperature  float64
+	provider         Provider
+	timeout          time.Duration
+	maxInputLen      int
+	systemPrompt     string
+	model            string
+	maxTokens        int
+	temperature      float64
+	presencePenalty  float64
+	frequencyPenalty float64
+	embeddingModel   string
 }
 
 // snapshot captures the current client state under a read lock.
@@ -202,13 +257,16 @@ func (c *Client) snapshot() clientState {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return clientState{
-		provider:     c.provider,
-		timeout:      c.timeout,
-		maxInputLen:  c.maxInputLen,
-		systemPrompt: c.systemPrompt,
-		model:        c.model,
-		maxTokens:    c.maxTokens,
-		temperature:  c.temperature,
+		provider:         c.provider,
+		timeout:          c.timeout,
+		maxInputLen:      c.maxInputLen,
+		systemPrompt:     c.systemPrompt,
+		model:            c.model,
+		maxTokens:        c.maxTokens,
+		temperature:      c.temperature,
+		presencePenalty:  c.presencePenalty,
+		frequencyPenalty: c.frequencyPenalty,
+		embeddingModel:   c.embeddingModel,
 	}
 }
 
@@ -250,10 +308,12 @@ func buildRequest(messages []Message, s clientState) *Request {
 		msgs = append([]Message{{Role: RoleSystem, Content: s.systemPrompt}}, msgs...)
 	}
 	return &Request{
-		Messages:    msgs,
-		Model:       s.model,
-		MaxTokens:   s.maxTokens,
-		Temperature: s.temperature,
+		Messages:         msgs,
+		Model:            s.model,
+		MaxTokens:        s.maxTokens,
+		Temperature:      s.temperature,
+		PresencePenalty:  s.presencePenalty,
+		FrequencyPenalty: s.frequencyPenalty,
 	}
 }
 
@@ -343,6 +403,43 @@ func (c *Client) StreamToWriter(ctx context.Context, messages []Message, w io.Wr
 		}
 	}
 	return nil
+}
+
+// Embed generates embeddings for one or more texts.
+// Returns an error if the provider does not support embeddings.
+func (c *Client) Embed(ctx context.Context, input ...string) (*EmbedResponse, error) {
+	s := c.snapshot()
+
+	if s.provider == nil {
+		return nil, ErrNoProvider
+	}
+
+	embedder, ok := s.provider.(Embedder)
+	if !ok {
+		return nil, errors.New("allm: provider does not support embeddings")
+	}
+
+	if len(input) == 0 {
+		return nil, ErrEmptyInput
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	resp, err := embedder.Embed(ctx, &EmbedRequest{
+		Input: input,
+		Model: s.embeddingModel,
+	})
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, ErrTimeout
+		}
+		if ctx.Err() == context.Canceled {
+			return nil, ErrCanceled
+		}
+		return nil, err
+	}
+	return resp, nil
 }
 
 // Models returns available models if the provider supports model listing.
