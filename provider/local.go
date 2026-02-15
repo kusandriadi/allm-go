@@ -23,6 +23,7 @@ type LocalProvider struct {
 	model       string
 	maxTokens   int
 	temperature float64
+	client      openai.Client
 }
 
 // LocalOption configures the Local provider.
@@ -73,6 +74,9 @@ func Local(baseURL string, opts ...LocalOption) *LocalProvider {
 		opt(p)
 	}
 
+	// Create client once for connection reuse
+	p.client = p.buildClient()
+
 	return p
 }
 
@@ -104,7 +108,6 @@ func (p *LocalProvider) Available() bool {
 func (p *LocalProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
 	start := time.Now()
 
-	client := p.newClient()
 	messages := p.convertMessages(req.Messages)
 
 	// Resolve model: request > provider default
@@ -132,7 +135,7 @@ func (p *LocalProvider) Complete(ctx context.Context, req *allm.Request) (*allm.
 		params.Temperature = openai.Float(temp)
 	}
 
-	completion, err := client.Chat.Completions.New(ctx, params)
+	completion, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -157,9 +160,7 @@ func (p *LocalProvider) Complete(ctx context.Context, req *allm.Request) (*allm.
 
 // Models returns available models from the local server.
 func (p *LocalProvider) Models(ctx context.Context) ([]allm.Model, error) {
-	client := p.newClient()
-
-	page, err := client.Models.List(ctx)
+	page, err := p.client.Models.List(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +197,7 @@ func (p *LocalProvider) Stream(ctx context.Context, req *allm.Request) <-chan al
 	return out
 }
 
-func (p *LocalProvider) newClient() openai.Client {
+func (p *LocalProvider) buildClient() openai.Client {
 	opts := []option.RequestOption{
 		option.WithBaseURL(p.baseURL),
 	}

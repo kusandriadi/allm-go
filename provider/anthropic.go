@@ -19,6 +19,7 @@ type AnthropicProvider struct {
 	maxTokens   int
 	temperature float64
 	baseURL     string
+	client      anthropic.Client
 }
 
 // AnthropicOption configures the Anthropic provider.
@@ -69,6 +70,14 @@ func Anthropic(apiKey string, opts ...AnthropicOption) *AnthropicProvider {
 		opt(p)
 	}
 
+	// Create client once for connection reuse
+	var clientOpts []option.RequestOption
+	clientOpts = append(clientOpts, option.WithAPIKey(p.apiKey))
+	if p.baseURL != "" {
+		clientOpts = append(clientOpts, option.WithBaseURL(p.baseURL))
+	}
+	p.client = anthropic.NewClient(clientOpts...)
+
 	return p
 }
 
@@ -85,14 +94,6 @@ func (p *AnthropicProvider) Available() bool {
 // Complete sends a completion request.
 func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
 	start := time.Now()
-
-	// Build client
-	var clientOpts []option.RequestOption
-	clientOpts = append(clientOpts, option.WithAPIKey(p.apiKey))
-	if p.baseURL != "" {
-		clientOpts = append(clientOpts, option.WithBaseURL(p.baseURL))
-	}
-	client := anthropic.NewClient(clientOpts...)
 
 	// Convert messages
 	var systemBlocks []anthropic.TextBlockParam
@@ -164,7 +165,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*a
 	}
 
 	// Send request
-	message, err := client.Messages.New(ctx, params)
+	message, err := p.client.Messages.New(ctx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -188,14 +189,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*a
 
 // Models returns available models from Anthropic.
 func (p *AnthropicProvider) Models(ctx context.Context) ([]allm.Model, error) {
-	var clientOpts []option.RequestOption
-	clientOpts = append(clientOpts, option.WithAPIKey(p.apiKey))
-	if p.baseURL != "" {
-		clientOpts = append(clientOpts, option.WithBaseURL(p.baseURL))
-	}
-	client := anthropic.NewClient(clientOpts...)
-
-	page, err := client.Models.List(ctx, anthropic.ModelListParams{})
+	page, err := p.client.Models.List(ctx, anthropic.ModelListParams{})
 	if err != nil {
 		return nil, err
 	}

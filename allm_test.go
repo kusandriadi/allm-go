@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 // mockProvider for testing
 type mockProvider struct {
+	mu        sync.Mutex
 	name      string
 	available bool
 	response  *Response
@@ -28,23 +30,36 @@ func (m *mockProvider) Available() bool {
 }
 
 func (m *mockProvider) Complete(_ context.Context, req *Request) (*Response, error) {
+	m.mu.Lock()
 	m.lastReq = req
-	if m.err != nil {
-		return nil, m.err
+	err := m.err
+	resp := m.response
+	m.mu.Unlock()
+	if err != nil {
+		return nil, err
 	}
-	return m.response, nil
+	return resp, nil
 }
 
 func (m *mockProvider) Stream(_ context.Context, req *Request) <-chan StreamChunk {
+	m.mu.Lock()
 	m.lastReq = req
+	chunks := m.chunks
+	m.mu.Unlock()
 	out := make(chan StreamChunk)
 	go func() {
 		defer close(out)
-		for _, chunk := range m.chunks {
+		for _, chunk := range chunks {
 			out <- chunk
 		}
 	}()
 	return out
+}
+
+func (m *mockProvider) getLastReq() *Request {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastReq
 }
 
 // mockModelLister implements both Provider and ModelLister
@@ -635,6 +650,109 @@ func TestVersion(t *testing.T) {
 	if Version == "" {
 		t.Error("Version should not be empty")
 	}
+}
+
+// --- Error sentinel tests ---
+
+func TestStreamInputTooLongWithImages(t *testing.T) {
+	p := &mockProvider{name: "test", available: true}
+	c := New(p, WithMaxInputLen(10))
+
+	var gotError error
+	for chunk := range c.Stream(context.Background(), []Message{
+		{
+			Role:    RoleUser,
+			Content: "Hi",
+			Images:  []Image{{MimeType: "image/png", Data: make([]byte, 20)}},
+		},
+	}) {
+		if chunk.Error != nil {
+			gotError = chunk.Error
+			break
+		}
+	}
+	if !errors.Is(gotError, ErrInputTooLong) {
+		t.Errorf("expected ErrInputTooLong for large images in stream, got %v", gotError)
+	}
+}
+
+// --- Concurrency tests ---
+
+func TestConcurrentSetModelAndComplete(t *testing.T) {
+	p := &mockProvider{name: "test", available: true, response: &Response{Content: "OK"}}
+	c := New(p, WithModel("initial"))
+
+	var wg sync.WaitGroup
+	// Run concurrent SetModel calls
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			if n%2 == 0 {
+				c.SetModel("model-a")
+			} else {
+				c.SetModel("model-b")
+			}
+		}(i)
+	}
+	// Run concurrent Complete calls
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.Complete(context.Background(), "Hi")
+		}()
+	}
+	wg.Wait()
+}
+
+func TestConcurrentSetProviderAndChat(t *testing.T) {
+	p1 := &mockProvider{name: "p1", available: true, response: &Response{Content: "OK"}}
+	p2 := &mockProvider{name: "p2", available: true, response: &Response{Content: "OK"}}
+	c := New(p1)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			c.SetProvider(p1)
+			c.SetProvider(p2)
+		}()
+		go func() {
+			defer wg.Done()
+			c.Chat(context.Background(), []Message{
+				{Role: RoleUser, Content: "Hello"},
+			})
+		}()
+	}
+	wg.Wait()
+}
+
+func TestConcurrentStream(t *testing.T) {
+	p := &mockProvider{
+		name: "test", available: true,
+		chunks: []StreamChunk{{Content: "OK"}, {Done: true}},
+	}
+	c := New(p, WithModel("test-model"))
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			c.SetModel("changed")
+			c.SetSystemPrompt("new prompt")
+		}()
+		go func() {
+			defer wg.Done()
+			for range c.Stream(context.Background(), []Message{
+				{Role: RoleUser, Content: "Hi"},
+			}) {
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 // --- Error sentinel tests ---

@@ -16,6 +16,7 @@ type DeepSeekProvider struct {
 	model       string
 	maxTokens   int
 	temperature float64
+	client      openai.Client
 }
 
 // DeepSeekOption configures the DeepSeek provider.
@@ -59,6 +60,12 @@ func DeepSeek(apiKey string, opts ...DeepSeekOption) *DeepSeekProvider {
 		opt(p)
 	}
 
+	// Create client once for connection reuse
+	p.client = openai.NewClient(
+		option.WithAPIKey(p.apiKey),
+		option.WithBaseURL("https://api.deepseek.com/v1"),
+	)
+
 	return p
 }
 
@@ -76,7 +83,6 @@ func (p *DeepSeekProvider) Available() bool {
 func (p *DeepSeekProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
 	start := time.Now()
 
-	client := p.newClient()
 	messages := convertToOpenAI(req.Messages)
 
 	// Resolve model: request > provider default
@@ -104,7 +110,7 @@ func (p *DeepSeekProvider) Complete(ctx context.Context, req *allm.Request) (*al
 		params.Temperature = openai.Float(temp)
 	}
 
-	completion, err := client.Chat.Completions.New(ctx, params)
+	completion, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -129,9 +135,7 @@ func (p *DeepSeekProvider) Complete(ctx context.Context, req *allm.Request) (*al
 
 // Models returns available models from DeepSeek.
 func (p *DeepSeekProvider) Models(ctx context.Context) ([]allm.Model, error) {
-	client := p.newClient()
-
-	page, err := client.Models.List(ctx)
+	page, err := p.client.Models.List(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -166,13 +170,6 @@ func (p *DeepSeekProvider) Stream(ctx context.Context, req *allm.Request) <-chan
 	}()
 
 	return out
-}
-
-func (p *DeepSeekProvider) newClient() openai.Client {
-	return openai.NewClient(
-		option.WithAPIKey(p.apiKey),
-		option.WithBaseURL("https://api.deepseek.com/v1"),
-	)
 }
 
 // convertToOpenAI is a helper shared by OpenAI-compatible providers.

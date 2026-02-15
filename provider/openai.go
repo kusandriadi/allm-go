@@ -18,6 +18,7 @@ type OpenAIProvider struct {
 	maxTokens   int
 	temperature float64
 	baseURL     string
+	client      openai.Client
 }
 
 // OpenAIOption configures the OpenAI provider.
@@ -68,6 +69,9 @@ func OpenAI(apiKey string, opts ...OpenAIOption) *OpenAIProvider {
 		opt(p)
 	}
 
+	// Create client once for connection reuse
+	p.client = p.buildClient()
+
 	return p
 }
 
@@ -85,7 +89,6 @@ func (p *OpenAIProvider) Available() bool {
 func (p *OpenAIProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
 	start := time.Now()
 
-	client := p.newClient()
 	messages := p.convertMessages(req.Messages)
 
 	// Resolve model: request > provider default
@@ -119,7 +122,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *allm.Request) (*allm
 
 	// Stop sequences handled via SDK's native interface if supported
 
-	completion, err := client.Chat.Completions.New(ctx, params)
+	completion, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -144,9 +147,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *allm.Request) (*allm
 
 // Models returns available models from OpenAI.
 func (p *OpenAIProvider) Models(ctx context.Context) ([]allm.Model, error) {
-	client := p.newClient()
-
-	page, err := client.Models.List(ctx)
+	page, err := p.client.Models.List(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +185,7 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *allm.Request) <-chan a
 	return out
 }
 
-func (p *OpenAIProvider) newClient() openai.Client {
+func (p *OpenAIProvider) buildClient() openai.Client {
 	opts := []option.RequestOption{
 		option.WithAPIKey(p.apiKey),
 	}

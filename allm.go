@@ -6,6 +6,9 @@
 //   - Secure: Safe defaults, input validation, context support
 //   - Simple: Easy to understand and use
 //
+// Client is safe for concurrent use. All setter and getter methods
+// are protected by a read-write mutex.
+//
 // Basic usage:
 //
 //	client := allm.New(
@@ -26,6 +29,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"time"
 )
 
@@ -170,7 +174,9 @@ func WithTemperature(t float64) Option {
 }
 
 // Client is the main interface for interacting with LLMs.
+// It is safe for concurrent use.
 type Client struct {
+	mu           sync.RWMutex
 	provider     Provider
 	timeout      time.Duration
 	maxInputLen  int
@@ -178,6 +184,32 @@ type Client struct {
 	model        string  // default model (overrides provider default)
 	maxTokens    int     // default max tokens (overrides provider default)
 	temperature  float64 // default temperature (overrides provider default)
+}
+
+// clientState holds a snapshot of client fields for use without holding the lock.
+type clientState struct {
+	provider     Provider
+	timeout      time.Duration
+	maxInputLen  int
+	systemPrompt string
+	model        string
+	maxTokens    int
+	temperature  float64
+}
+
+// snapshot captures the current client state under a read lock.
+func (c *Client) snapshot() clientState {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return clientState{
+		provider:     c.provider,
+		timeout:      c.timeout,
+		maxInputLen:  c.maxInputLen,
+		systemPrompt: c.systemPrompt,
+		model:        c.model,
+		maxTokens:    c.maxTokens,
+		temperature:  c.temperature,
+	}
 }
 
 // New creates a new Client with the given provider and options.
@@ -193,18 +225,8 @@ func New(provider Provider, opts ...Option) *Client {
 	return c
 }
 
-// Complete sends a simple text completion request.
-func (c *Client) Complete(ctx context.Context, prompt string) (*Response, error) {
-	return c.Chat(ctx, []Message{{Role: RoleUser, Content: prompt}})
-}
-
-// Chat sends a multi-turn conversation request.
-func (c *Client) Chat(ctx context.Context, messages []Message) (*Response, error) {
-	if c.provider == nil {
-		return nil, ErrNoProvider
-	}
-
-	// Validate input
+// validateMessages checks message constraints.
+func validateMessages(messages []Message, maxInputLen int) error {
 	totalLen := 0
 	for _, m := range messages {
 		totalLen += len(m.Content)
@@ -213,30 +235,51 @@ func (c *Client) Chat(ctx context.Context, messages []Message) (*Response, error
 		}
 	}
 	if totalLen == 0 {
-		return nil, ErrEmptyInput
+		return ErrEmptyInput
 	}
-	if totalLen > c.maxInputLen {
-		return nil, ErrInputTooLong
+	if totalLen > maxInputLen {
+		return ErrInputTooLong
 	}
+	return nil
+}
 
-	// Build request
+// buildRequest creates a Request from messages and client state.
+func buildRequest(messages []Message, s clientState) *Request {
 	msgs := messages
-	if c.systemPrompt != "" {
-		msgs = append([]Message{{Role: RoleSystem, Content: c.systemPrompt}}, msgs...)
+	if s.systemPrompt != "" {
+		msgs = append([]Message{{Role: RoleSystem, Content: s.systemPrompt}}, msgs...)
 	}
-	req := &Request{
+	return &Request{
 		Messages:    msgs,
-		Model:       c.model,
-		MaxTokens:   c.maxTokens,
-		Temperature: c.temperature,
+		Model:       s.model,
+		MaxTokens:   s.maxTokens,
+		Temperature: s.temperature,
+	}
+}
+
+// Complete sends a simple text completion request.
+func (c *Client) Complete(ctx context.Context, prompt string) (*Response, error) {
+	return c.Chat(ctx, []Message{{Role: RoleUser, Content: prompt}})
+}
+
+// Chat sends a multi-turn conversation request.
+func (c *Client) Chat(ctx context.Context, messages []Message) (*Response, error) {
+	s := c.snapshot()
+
+	if s.provider == nil {
+		return nil, ErrNoProvider
 	}
 
-	// Apply timeout
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	if err := validateMessages(messages, s.maxInputLen); err != nil {
+		return nil, err
+	}
+
+	req := buildRequest(messages, s)
+
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
-	// Execute
-	resp, err := c.provider.Complete(ctx, req)
+	resp, err := s.provider.Complete(ctx, req)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return nil, ErrTimeout
@@ -253,46 +296,28 @@ func (c *Client) Chat(ctx context.Context, messages []Message) (*Response, error
 func (c *Client) Stream(ctx context.Context, messages []Message) <-chan StreamChunk {
 	out := make(chan StreamChunk)
 
+	// Snapshot client state before goroutine to prevent data races.
+	s := c.snapshot()
+
 	go func() {
 		defer close(out)
 
-		if c.provider == nil {
+		if s.provider == nil {
 			out <- StreamChunk{Error: ErrNoProvider}
 			return
 		}
 
-		// Validate input
-		totalLen := 0
-		for _, m := range messages {
-			totalLen += len(m.Content)
-		}
-		if totalLen == 0 {
-			out <- StreamChunk{Error: ErrEmptyInput}
-			return
-		}
-		if totalLen > c.maxInputLen {
-			out <- StreamChunk{Error: ErrInputTooLong}
+		if err := validateMessages(messages, s.maxInputLen); err != nil {
+			out <- StreamChunk{Error: err}
 			return
 		}
 
-		// Build request
-		msgs := messages
-		if c.systemPrompt != "" {
-			msgs = append([]Message{{Role: RoleSystem, Content: c.systemPrompt}}, msgs...)
-		}
-		req := &Request{
-			Messages:    msgs,
-			Model:       c.model,
-			MaxTokens:   c.maxTokens,
-			Temperature: c.temperature,
-		}
+		req := buildRequest(messages, s)
 
-		// Apply timeout
-		ctx, cancel := context.WithTimeout(ctx, c.timeout)
+		ctx, cancel := context.WithTimeout(ctx, s.timeout)
 		defer cancel()
 
-		// Stream from provider
-		chunks := c.provider.Stream(ctx, req)
+		chunks := s.provider.Stream(ctx, req)
 		for chunk := range chunks {
 			out <- chunk
 			if chunk.Done || chunk.Error != nil {
@@ -322,10 +347,14 @@ func (c *Client) StreamToWriter(ctx context.Context, messages []Message, w io.Wr
 
 // Models returns available models if the provider supports model listing.
 func (c *Client) Models(ctx context.Context) ([]Model, error) {
-	if c.provider == nil {
+	c.mu.RLock()
+	p := c.provider
+	c.mu.RUnlock()
+
+	if p == nil {
 		return nil, ErrNoProvider
 	}
-	lister, ok := c.provider.(ModelLister)
+	lister, ok := p.(ModelLister)
 	if !ok {
 		return nil, errors.New("allm: provider does not support model listing")
 	}
@@ -334,20 +363,28 @@ func (c *Client) Models(ctx context.Context) ([]Model, error) {
 
 // Provider returns the underlying provider.
 func (c *Client) Provider() Provider {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.provider
 }
 
 // SetProvider replaces the provider.
 func (c *Client) SetProvider(p Provider) {
+	c.mu.Lock()
 	c.provider = p
+	c.mu.Unlock()
 }
 
 // SetModel updates the default model.
 func (c *Client) SetModel(model string) {
+	c.mu.Lock()
 	c.model = model
+	c.mu.Unlock()
 }
 
 // SetSystemPrompt updates the system prompt.
 func (c *Client) SetSystemPrompt(prompt string) {
+	c.mu.Lock()
 	c.systemPrompt = prompt
+	c.mu.Unlock()
 }
