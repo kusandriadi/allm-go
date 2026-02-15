@@ -4,7 +4,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat&logo=go)](https://go.dev)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A thin, lightweight LLM client for Go. One API for Anthropic, OpenAI, DeepSeek, and local models.
+A thin, lightweight LLM client for Go. One API for Anthropic, OpenAI, DeepSeek, GLM (Zhipu AI), and local models.
 
 ```go
 client := allm.New(provider.Anthropic(""))
@@ -59,6 +59,9 @@ client := allm.New(provider.OpenAI(""))
 
 // DeepSeek — reads DEEPSEEK_API_KEY from env
 client := allm.New(provider.DeepSeek(""))
+
+// GLM (Zhipu AI) — reads GLM_API_KEY from env
+client := allm.New(provider.GLM(""))
 
 // Local (Ollama, vLLM, any OpenAI-compatible server)
 client := allm.New(provider.Ollama("llama3"))
@@ -137,7 +140,7 @@ resp, _ = client.Embed(ctx, "Hello", "World", "Foo")
 // resp.Embeddings has 3 vectors
 ```
 
-Supported by: OpenAI, Local (Ollama/vLLM). Not supported by: Anthropic, DeepSeek.
+Supported by: OpenAI, GLM, Local (Ollama/vLLM). Not supported by: Anthropic, DeepSeek.
 
 ### Switch Model at Runtime
 
@@ -176,9 +179,16 @@ provider.OpenAIO4Mini             // o4-mini
 provider.DeepSeekChat             // deepseek-chat
 provider.DeepSeekReasoner         // deepseek-reasoner
 
+// GLM (Zhipu AI)
+provider.GLM5                     // glm-5
+provider.GLM4_7                   // glm-4-7
+provider.GLM4_7Flash              // glm-4-7-flash
+provider.GLM4_5Flash              // glm-4-5-flash
+
 // Embedding Models
 provider.OpenAITextEmbedding3Small  // text-embedding-3-small
 provider.OpenAITextEmbedding3Large  // text-embedding-3-large
+provider.GLMEmbedding3              // embedding-3
 ```
 
 ## Client Options

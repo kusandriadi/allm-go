@@ -188,6 +188,62 @@ func TestDeepSeekEnvKey(t *testing.T) {
 	}
 }
 
+// --- GLM ---
+
+func TestGLMNew(t *testing.T) {
+	p := GLM("")
+	if p.Name() != "glm" {
+		t.Errorf("expected 'glm', got %q", p.Name())
+	}
+	if p.model != "glm-4-flash" {
+		t.Errorf("expected default model, got %q", p.model)
+	}
+	if p.maxTokens != 4096 {
+		t.Errorf("expected 4096, got %d", p.maxTokens)
+	}
+}
+
+func TestGLMWithOptions(t *testing.T) {
+	p := GLM("test-key",
+		WithGLMModel("glm-4"),
+		WithGLMMaxTokens(8192),
+		WithGLMTemperature(0.5),
+	)
+
+	if p.apiKey != "test-key" {
+		t.Error("API key not set")
+	}
+	if p.model != "glm-4" {
+		t.Error("model not set")
+	}
+	if p.maxTokens != 8192 {
+		t.Error("maxTokens not set")
+	}
+	if p.temperature != 0.5 {
+		t.Error("temperature not set")
+	}
+}
+
+func TestGLMAvailable(t *testing.T) {
+	p1 := GLM("")
+	if p1.Available() {
+		t.Error("should not be available without key")
+	}
+
+	p2 := GLM("test-key")
+	if !p2.Available() {
+		t.Error("should be available with key")
+	}
+}
+
+func TestGLMEnvKey(t *testing.T) {
+	t.Setenv("GLM_API_KEY", "env-key")
+	p := GLM("")
+	if p.apiKey != "env-key" {
+		t.Errorf("expected env key, got %q", p.apiKey)
+	}
+}
+
 // --- Local ---
 
 func TestLocalNew(t *testing.T) {

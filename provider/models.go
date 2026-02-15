@@ -72,6 +72,30 @@ const (
 	DeepSeekReasoner = "deepseek-reasoner"
 )
 
+// GLM (Zhipu AI) models.
+const (
+	// GLM-5 - Latest and most capable
+	GLM5 = "glm-5"
+	// GLM-4-7
+	GLM4_7 = "glm-4-7"
+	// GLM-4-7 Flash
+	GLM4_7Flash = "glm-4-7-flash"
+	// GLM-4-6
+	GLM4_6 = "glm-4-6"
+	// GLM-4-5
+	GLM4_5 = "glm-4-5"
+	// GLM-4-5 Flash
+	GLM4_5Flash = "glm-4-5-flash"
+)
+
+// GLM (Zhipu AI) Embedding models.
+const (
+	// GLM Embedding 3
+	GLMEmbedding3 = "embedding-3"
+	// GLM Embedding 2
+	GLMEmbedding2 = "embedding-2"
+)
+
 // OpenAI Embedding models.
 const (
 	// Text Embedding 3 Small - Fast and cost-effective

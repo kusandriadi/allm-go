@@ -62,6 +62,25 @@ func TestDeepSeekModelConstants(t *testing.T) {
 	}
 }
 
+func TestGLMModelConstants(t *testing.T) {
+	models := map[string]string{
+		"GLM5":          GLM5,
+		"GLM4_7":        GLM4_7,
+		"GLM4_7Flash":   GLM4_7Flash,
+		"GLM4_6":        GLM4_6,
+		"GLM4_5":        GLM4_5,
+		"GLM4_5Flash":   GLM4_5Flash,
+		"GLMEmbedding3": GLMEmbedding3,
+		"GLMEmbedding2": GLMEmbedding2,
+	}
+
+	for name, val := range models {
+		if val == "" {
+			t.Errorf("%s should not be empty", name)
+		}
+	}
+}
+
 func TestModelConstantsUsableAsOptions(t *testing.T) {
 	// Verify model constants work with provider options
 	p1 := Anthropic("key", WithAnthropicModel(AnthropicClaudeOpus4_6))
@@ -77,5 +96,10 @@ func TestModelConstantsUsableAsOptions(t *testing.T) {
 	p3 := DeepSeek("key", WithDeepSeekModel(DeepSeekReasoner))
 	if p3.model != "deepseek-reasoner" {
 		t.Errorf("expected deepseek-reasoner, got %q", p3.model)
+	}
+
+	p4 := GLM("key", WithGLMModel(GLM5))
+	if p4.model != "glm-5" {
+		t.Errorf("expected glm-5, got %q", p4.model)
 	}
 }
