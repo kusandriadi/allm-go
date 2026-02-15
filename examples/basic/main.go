@@ -1,4 +1,4 @@
-// Example: Basic usage of allm-go
+// Example: Basic usage of allm-go with multiple providers
 package main
 
 import (
@@ -13,14 +13,16 @@ import (
 )
 
 func main() {
-	// Create a client with Anthropic provider
+	ctx := context.Background()
+
+	// Create a client with Anthropic provider using model constant
 	client := allm.New(
-		provider.Anthropic(""), // Empty = reads from ANTHROPIC_API_KEY env
+		provider.Anthropic("",
+			provider.WithAnthropicModel(provider.AnthropicClaudeSonnet4_5),
+		),
 		allm.WithTimeout(30*time.Second),
 		allm.WithSystemPrompt("You are a helpful assistant. Be concise."),
 	)
-
-	ctx := context.Background()
 
 	// Simple completion
 	fmt.Println("=== Simple Completion ===")
@@ -58,10 +60,10 @@ func main() {
 	fmt.Println()
 
 	// Stream to file
-	fmt.Println("=== Stream to File ===")
+	fmt.Println("\n=== Stream to File ===")
 	f, _ := os.CreateTemp("", "allm-*.txt")
 	defer os.Remove(f.Name())
-	
+
 	err = client.StreamToWriter(ctx, []allm.Message{
 		{Role: allm.RoleUser, Content: "Write a haiku about programming."},
 	}, f)
@@ -69,7 +71,18 @@ func main() {
 		log.Fatal(err)
 	}
 	f.Close()
-	
+
 	content, _ := os.ReadFile(f.Name())
-	fmt.Printf("Written to %s:\n%s\n", f.Name(), string(content))
+	fmt.Printf("Written to %s:\n%s\n\n", f.Name(), string(content))
+
+	// Switch provider at runtime
+	fmt.Println("=== Switch Provider ===")
+	client.SetProvider(provider.OpenAI("",
+		provider.WithOpenAIModel(provider.OpenAIGPT4o),
+	))
+	resp, err = client.Complete(ctx, "What provider are you?")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("[OpenAI] %s\n", resp.Content)
 }

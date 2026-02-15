@@ -99,6 +99,31 @@ for _, m := range models {
 }
 ```
 
+## Model Constants
+
+Use built-in constants instead of hardcoding model ID strings. For runtime discovery, use `client.Models(ctx)`.
+
+```go
+// Anthropic
+provider.AnthropicClaudeOpus4_6    // "claude-opus-4-6"
+provider.AnthropicClaudeOpus4_5    // "claude-opus-4-5"
+provider.AnthropicClaudeSonnet4_5  // "claude-sonnet-4-5-20250929"
+provider.AnthropicClaudeSonnet4    // "claude-sonnet-4-20250514"
+provider.AnthropicClaudeHaiku4_5   // "claude-haiku-4-5-20251001"
+
+// OpenAI
+provider.OpenAIGPT5_2             // "gpt-5.2"
+provider.OpenAIGPT5_1             // "gpt-5.1"
+provider.OpenAIGPT4_1             // "gpt-4.1"
+provider.OpenAIGPT4o              // "gpt-4o"
+provider.OpenAIO3                 // "o3"
+provider.OpenAIO4Mini             // "o4-mini"
+
+// DeepSeek
+provider.DeepSeekChat             // "deepseek-chat"
+provider.DeepSeekReasoner         // "deepseek-reasoner"
+```
+
 ## Providers
 
 ### Anthropic (Claude)
@@ -110,11 +135,15 @@ client := allm.New(provider.Anthropic(""))
 // With explicit key
 client := allm.New(provider.Anthropic("sk-ant-..."))
 
-// With options
+// Use model constants (recommended)
 client := allm.New(provider.Anthropic("",
-    provider.WithAnthropicModel("claude-opus-4-20250514"),
+    provider.WithAnthropicModel(provider.AnthropicClaudeOpus4_6),
     provider.WithAnthropicMaxTokens(8192),
     provider.WithAnthropicTemperature(0.7),
+))
+
+// Custom base URL (for proxies)
+client := allm.New(provider.Anthropic("",
     provider.WithAnthropicBaseURL("https://proxy.example.com"),
 ))
 ```
@@ -125,10 +154,15 @@ client := allm.New(provider.Anthropic("",
 // From environment variable OPENAI_API_KEY
 client := allm.New(provider.OpenAI(""))
 
-// With options
+// Use model constants (recommended)
 client := allm.New(provider.OpenAI("",
-    provider.WithOpenAIModel("gpt-4-turbo"),
+    provider.WithOpenAIModel(provider.OpenAIGPT5_2),
     provider.WithOpenAIMaxTokens(4096),
+))
+
+// Reasoning model
+client := allm.New(provider.OpenAI("",
+    provider.WithOpenAIModel(provider.OpenAIO3),
 ))
 
 // Azure OpenAI
@@ -144,9 +178,14 @@ client := allm.New(provider.OpenAI("your-key",
 // From environment variable DEEPSEEK_API_KEY
 client := allm.New(provider.DeepSeek(""))
 
-// With model
+// Chat model (general purpose)
 client := allm.New(provider.DeepSeek("",
-    provider.WithDeepSeekModel("deepseek-coder"),
+    provider.WithDeepSeekModel(provider.DeepSeekChat),
+))
+
+// Reasoner model (chain-of-thought)
+client := allm.New(provider.DeepSeek("",
+    provider.WithDeepSeekModel(provider.DeepSeekReasoner),
 ))
 ```
 
