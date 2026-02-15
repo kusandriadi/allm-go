@@ -66,9 +66,10 @@ type Image struct {
 // Request contains parameters for an LLM request.
 type Request struct {
 	Messages    []Message
-	MaxTokens   int     // Max tokens to generate (0 = provider default)
-	Temperature float64 // Sampling temperature (0 = provider default)
-	TopP        float64 // Nucleus sampling (0 = provider default)
+	Model       string   // Model to use (0 = provider default)
+	MaxTokens   int      // Max tokens to generate (0 = provider default)
+	Temperature float64  // Sampling temperature (0 = provider default)
+	TopP        float64  // Nucleus sampling (0 = provider default)
 	Stop        []string // Stop sequences
 }
 
@@ -144,12 +145,39 @@ func WithSystemPrompt(prompt string) Option {
 	}
 }
 
+// WithModel sets the default model for all requests.
+// This overrides the provider's default model.
+func WithModel(model string) Option {
+	return func(c *Client) {
+		c.model = model
+	}
+}
+
+// WithMaxTokens sets the default max output tokens for all requests.
+// This overrides the provider's default max tokens.
+func WithMaxTokens(n int) Option {
+	return func(c *Client) {
+		c.maxTokens = n
+	}
+}
+
+// WithTemperature sets the default temperature for all requests.
+// This overrides the provider's default temperature.
+func WithTemperature(t float64) Option {
+	return func(c *Client) {
+		c.temperature = t
+	}
+}
+
 // Client is the main interface for interacting with LLMs.
 type Client struct {
 	provider     Provider
 	timeout      time.Duration
 	maxInputLen  int
 	systemPrompt string
+	model        string  // default model (overrides provider default)
+	maxTokens    int     // default max tokens (overrides provider default)
+	temperature  float64 // default temperature (overrides provider default)
 }
 
 // New creates a new Client with the given provider and options.
@@ -196,7 +224,12 @@ func (c *Client) Chat(ctx context.Context, messages []Message) (*Response, error
 	if c.systemPrompt != "" {
 		msgs = append([]Message{{Role: RoleSystem, Content: c.systemPrompt}}, msgs...)
 	}
-	req := &Request{Messages: msgs}
+	req := &Request{
+		Messages:    msgs,
+		Model:       c.model,
+		MaxTokens:   c.maxTokens,
+		Temperature: c.temperature,
+	}
 
 	// Apply timeout
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
@@ -247,7 +280,12 @@ func (c *Client) Stream(ctx context.Context, messages []Message) <-chan StreamCh
 		if c.systemPrompt != "" {
 			msgs = append([]Message{{Role: RoleSystem, Content: c.systemPrompt}}, msgs...)
 		}
-		req := &Request{Messages: msgs}
+		req := &Request{
+			Messages:    msgs,
+			Model:       c.model,
+			MaxTokens:   c.maxTokens,
+			Temperature: c.temperature,
+		}
 
 		// Apply timeout
 		ctx, cancel := context.WithTimeout(ctx, c.timeout)
@@ -302,6 +340,11 @@ func (c *Client) Provider() Provider {
 // SetProvider replaces the provider.
 func (c *Client) SetProvider(p Provider) {
 	c.provider = p
+}
+
+// SetModel updates the default model.
+func (c *Client) SetModel(model string) {
+	c.model = model
 }
 
 // SetSystemPrompt updates the system prompt.

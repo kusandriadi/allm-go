@@ -83,6 +83,9 @@ func TestNewWithOptions(t *testing.T) {
 		WithTimeout(30*time.Second),
 		WithMaxInputLen(50000),
 		WithSystemPrompt("Be helpful."),
+		WithModel("test-model"),
+		WithMaxTokens(8192),
+		WithTemperature(0.7),
 	)
 
 	if c.timeout != 30*time.Second {
@@ -93,6 +96,15 @@ func TestNewWithOptions(t *testing.T) {
 	}
 	if c.systemPrompt != "Be helpful." {
 		t.Errorf("expected system prompt, got %q", c.systemPrompt)
+	}
+	if c.model != "test-model" {
+		t.Errorf("expected test-model, got %q", c.model)
+	}
+	if c.maxTokens != 8192 {
+		t.Errorf("expected 8192, got %d", c.maxTokens)
+	}
+	if c.temperature != 0.7 {
+		t.Errorf("expected 0.7, got %f", c.temperature)
 	}
 }
 
@@ -511,6 +523,81 @@ func TestModelsNoProvider(t *testing.T) {
 	_, err := c.Models(context.Background())
 	if !errors.Is(err, ErrNoProvider) {
 		t.Errorf("expected ErrNoProvider, got %v", err)
+	}
+}
+
+// --- Client-level model/maxTokens/temperature tests ---
+
+func TestClientModelFlowsToRequest(t *testing.T) {
+	p := &mockProvider{name: "test", available: true, response: &Response{Content: "OK"}}
+	c := New(p, WithModel("my-model"), WithMaxTokens(2048), WithTemperature(0.5))
+
+	c.Complete(context.Background(), "Hi")
+
+	if p.lastReq == nil {
+		t.Fatal("expected request to be captured")
+	}
+	if p.lastReq.Model != "my-model" {
+		t.Errorf("expected model 'my-model', got %q", p.lastReq.Model)
+	}
+	if p.lastReq.MaxTokens != 2048 {
+		t.Errorf("expected maxTokens 2048, got %d", p.lastReq.MaxTokens)
+	}
+	if p.lastReq.Temperature != 0.5 {
+		t.Errorf("expected temperature 0.5, got %f", p.lastReq.Temperature)
+	}
+}
+
+func TestClientModelDefaultsToZero(t *testing.T) {
+	p := &mockProvider{name: "test", available: true, response: &Response{Content: "OK"}}
+	c := New(p) // no model/maxTokens/temperature set
+
+	c.Complete(context.Background(), "Hi")
+
+	if p.lastReq.Model != "" {
+		t.Errorf("expected empty model, got %q", p.lastReq.Model)
+	}
+	if p.lastReq.MaxTokens != 0 {
+		t.Errorf("expected 0 maxTokens, got %d", p.lastReq.MaxTokens)
+	}
+	if p.lastReq.Temperature != 0 {
+		t.Errorf("expected 0 temperature, got %f", p.lastReq.Temperature)
+	}
+}
+
+func TestSetModel(t *testing.T) {
+	p := &mockProvider{name: "test", available: true, response: &Response{Content: "OK"}}
+	c := New(p, WithModel("model-a"))
+
+	c.Complete(context.Background(), "Hi")
+	if p.lastReq.Model != "model-a" {
+		t.Errorf("expected model-a, got %q", p.lastReq.Model)
+	}
+
+	c.SetModel("model-b")
+	c.Complete(context.Background(), "Hi")
+	if p.lastReq.Model != "model-b" {
+		t.Errorf("expected model-b, got %q", p.lastReq.Model)
+	}
+}
+
+func TestStreamModelFlowsToRequest(t *testing.T) {
+	p := &mockProvider{
+		name: "test", available: true,
+		chunks: []StreamChunk{{Content: "OK"}, {Done: true}},
+	}
+	c := New(p, WithModel("stream-model"), WithMaxTokens(1024))
+
+	for range c.Stream(context.Background(), []Message{
+		{Role: RoleUser, Content: "Hi"},
+	}) {
+	}
+
+	if p.lastReq.Model != "stream-model" {
+		t.Errorf("expected stream-model, got %q", p.lastReq.Model)
+	}
+	if p.lastReq.MaxTokens != 1024 {
+		t.Errorf("expected 1024, got %d", p.lastReq.MaxTokens)
 	}
 }
 

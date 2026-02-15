@@ -1,4 +1,4 @@
-// Example: Basic usage of allm-go with multiple providers
+// Example: Basic usage of allm-go with the recommended pattern
 package main
 
 import (
@@ -15,11 +15,12 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// Create a client with Anthropic provider using model constant
+	// Provider = auth only, Client = behavior
 	client := allm.New(
-		provider.Anthropic("",
-			provider.WithAnthropicModel(provider.AnthropicClaudeSonnet4_5),
-		),
+		provider.Anthropic(""), // reads ANTHROPIC_API_KEY from env
+		allm.WithModel(provider.AnthropicClaudeSonnet4_5),
+		allm.WithMaxTokens(4096),
+		allm.WithTemperature(0.7),
 		allm.WithTimeout(30*time.Second),
 		allm.WithSystemPrompt("You are a helpful assistant. Be concise."),
 	)
@@ -31,8 +32,8 @@ func main() {
 		log.Fatal(err)
 	}
 	fmt.Printf("Response: %s\n", resp.Content)
-	fmt.Printf("Tokens: %d in, %d out\n", resp.InputTokens, resp.OutputTokens)
-	fmt.Printf("Latency: %v\n\n", resp.Latency)
+	fmt.Printf("Model: %s | Tokens: %d in, %d out | Latency: %v\n\n",
+		resp.Model, resp.InputTokens, resp.OutputTokens, resp.Latency)
 
 	// Multi-turn conversation
 	fmt.Println("=== Multi-turn Chat ===")
@@ -46,7 +47,17 @@ func main() {
 	}
 	fmt.Printf("Response: %s\n\n", resp.Content)
 
+	// Switch model at runtime (same API key, no new provider needed)
+	fmt.Println("=== Switch Model ===")
+	client.SetModel(provider.AnthropicClaudeHaiku4_5)
+	resp, err = client.Complete(ctx, "What is 1+1?")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("[Haiku] %s (model: %s)\n\n", resp.Content, resp.Model)
+
 	// Streaming
+	client.SetModel(provider.AnthropicClaudeSonnet4_5)
 	fmt.Println("=== Streaming ===")
 	fmt.Print("Response: ")
 	for chunk := range client.Stream(ctx, []allm.Message{
@@ -75,11 +86,10 @@ func main() {
 	content, _ := os.ReadFile(f.Name())
 	fmt.Printf("Written to %s:\n%s\n\n", f.Name(), string(content))
 
-	// Switch provider at runtime
+	// Switch to different provider entirely
 	fmt.Println("=== Switch Provider ===")
-	client.SetProvider(provider.OpenAI("",
-		provider.WithOpenAIModel(provider.OpenAIGPT4o),
-	))
+	client.SetProvider(provider.OpenAI(""))
+	client.SetModel(provider.OpenAIGPT4o)
 	resp, err = client.Complete(ctx, "What provider are you?")
 	if err != nil {
 		log.Fatal(err)

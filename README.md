@@ -129,64 +129,63 @@ provider.DeepSeekReasoner         // "deepseek-reasoner"
 ### Anthropic (Claude)
 
 ```go
-// From environment variable ANTHROPIC_API_KEY
+// Basic (reads ANTHROPIC_API_KEY from env, default model)
 client := allm.New(provider.Anthropic(""))
 
-// With explicit key
-client := allm.New(provider.Anthropic("sk-ant-..."))
-
-// Use model constants (recommended)
-client := allm.New(provider.Anthropic("",
-    provider.WithAnthropicModel(provider.AnthropicClaudeOpus4_6),
-    provider.WithAnthropicMaxTokens(8192),
-    provider.WithAnthropicTemperature(0.7),
-))
+// Recommended: model & params at client level
+client := allm.New(
+    provider.Anthropic("sk-ant-..."),
+    allm.WithModel(provider.AnthropicClaudeOpus4_6),
+    allm.WithMaxTokens(8192),
+    allm.WithTemperature(0.7),
+)
 
 // Custom base URL (for proxies)
-client := allm.New(provider.Anthropic("",
-    provider.WithAnthropicBaseURL("https://proxy.example.com"),
-))
+client := allm.New(
+    provider.Anthropic("", provider.WithAnthropicBaseURL("https://proxy.example.com")),
+    allm.WithModel(provider.AnthropicClaudeSonnet4_5),
+)
 ```
 
 ### OpenAI (GPT)
 
 ```go
-// From environment variable OPENAI_API_KEY
+// Basic (reads OPENAI_API_KEY from env)
 client := allm.New(provider.OpenAI(""))
 
-// Use model constants (recommended)
-client := allm.New(provider.OpenAI("",
-    provider.WithOpenAIModel(provider.OpenAIGPT5_2),
-    provider.WithOpenAIMaxTokens(4096),
-))
+// With model
+client := allm.New(
+    provider.OpenAI(""),
+    allm.WithModel(provider.OpenAIGPT5_2),
+    allm.WithMaxTokens(4096),
+)
 
 // Reasoning model
-client := allm.New(provider.OpenAI("",
-    provider.WithOpenAIModel(provider.OpenAIO3),
-))
+client := allm.New(
+    provider.OpenAI(""),
+    allm.WithModel(provider.OpenAIO3),
+)
 
 // Azure OpenAI
-client := allm.New(provider.OpenAI("your-key",
-    provider.WithOpenAIBaseURL("https://your-resource.openai.azure.com/"),
-    provider.WithOpenAIModel("your-deployment"),
-))
+client := allm.New(
+    provider.OpenAI("your-key",
+        provider.WithOpenAIBaseURL("https://your-resource.openai.azure.com/"),
+    ),
+    allm.WithModel("your-deployment"),
+)
 ```
 
 ### DeepSeek
 
 ```go
-// From environment variable DEEPSEEK_API_KEY
+// Basic (reads DEEPSEEK_API_KEY from env)
 client := allm.New(provider.DeepSeek(""))
 
-// Chat model (general purpose)
-client := allm.New(provider.DeepSeek("",
-    provider.WithDeepSeekModel(provider.DeepSeekChat),
-))
-
-// Reasoner model (chain-of-thought)
-client := allm.New(provider.DeepSeek("",
-    provider.WithDeepSeekModel(provider.DeepSeekReasoner),
-))
+// Reasoner model
+client := allm.New(
+    provider.DeepSeek(""),
+    allm.WithModel(provider.DeepSeekReasoner),
+)
 ```
 
 ### Local (Ollama, vLLM, etc.)
@@ -199,19 +198,38 @@ client := allm.New(provider.Ollama("llama3"))
 client := allm.New(provider.VLLM("mistral"))
 
 // Custom OpenAI-compatible server
-client := allm.New(provider.Local("http://my-server:8080/v1",
-    provider.WithLocalModel("phi-3"),
-    provider.WithLocalAPIKey("optional-key"),
-))
+client := allm.New(
+    provider.Local("http://my-server:8080/v1",
+        provider.WithLocalAPIKey("optional-key"),
+    ),
+    allm.WithModel("phi-3"),
+)
+```
+
+### Switch Model at Runtime
+
+```go
+// Same API key, different models — no need to recreate provider
+client := allm.New(
+    provider.Anthropic(""),
+    allm.WithModel(provider.AnthropicClaudeOpus4_6),
+)
+resp, _ := client.Complete(ctx, "Complex task...")
+
+client.SetModel(provider.AnthropicClaudeHaiku4_5)
+resp, _ = client.Complete(ctx, "Simple task...")
 ```
 
 ## Client Options
 
 ```go
 client := allm.New(p,
-    allm.WithTimeout(30 * time.Second),     // Request timeout (default: 60s)
-    allm.WithMaxInputLen(200000),            // Max input bytes (default: 100KB)
-    allm.WithSystemPrompt("Be helpful."),    // System prompt for all requests
+    allm.WithModel(provider.AnthropicClaudeSonnet4_5), // Model
+    allm.WithMaxTokens(8192),                          // Max output tokens
+    allm.WithTemperature(0.7),                         // Sampling temperature
+    allm.WithTimeout(30 * time.Second),                // Request timeout (default: 60s)
+    allm.WithMaxInputLen(200000),                      // Max input bytes (default: 100KB)
+    allm.WithSystemPrompt("Be helpful."),              // System prompt
 )
 ```
 
@@ -366,6 +384,7 @@ mock.Reset() // clear all recorded requests
 | `client.Models(ctx)` | List available models |
 | `client.Provider()` | Get current provider |
 | `client.SetProvider(p)` | Switch provider at runtime |
+| `client.SetModel(m)` | Switch model at runtime |
 | `client.SetSystemPrompt(s)` | Update system prompt |
 
 ## Security

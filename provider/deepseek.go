@@ -79,13 +79,19 @@ func (p *DeepSeekProvider) Complete(ctx context.Context, req *allm.Request) (*al
 	client := p.newClient()
 	messages := convertToOpenAI(req.Messages)
 
+	// Resolve model: request > provider default
+	model := p.model
+	if req.Model != "" {
+		model = req.Model
+	}
+
 	maxTokens := int64(p.maxTokens)
 	if req.MaxTokens > 0 {
 		maxTokens = int64(req.MaxTokens)
 	}
 
 	params := openai.ChatCompletionNewParams{
-		Model:     openai.ChatModel(p.model),
+		Model:     openai.ChatModel(model),
 		Messages:  messages,
 		MaxTokens: openai.Int(maxTokens),
 	}
@@ -113,7 +119,7 @@ func (p *DeepSeekProvider) Complete(ctx context.Context, req *allm.Request) (*al
 	return &allm.Response{
 		Content:      content,
 		Provider:     "deepseek",
-		Model:        p.model,
+		Model:        model,
 		InputTokens:  int(completion.Usage.PromptTokens),
 		OutputTokens: int(completion.Usage.CompletionTokens),
 		Latency:      time.Since(start),

@@ -15,9 +15,11 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// --- Basic usage (reads ANTHROPIC_API_KEY from env) ---
+	// --- Provider handles auth, Client handles behavior ---
 	client := allm.New(
-		provider.Anthropic(""),
+		provider.Anthropic(""), // reads ANTHROPIC_API_KEY from env
+		allm.WithModel(provider.AnthropicClaudeSonnet4_5),
+		allm.WithMaxTokens(4096),
 		allm.WithTimeout(30*time.Second),
 	)
 
@@ -29,32 +31,24 @@ func main() {
 	fmt.Printf("Model: %s | Tokens: %d in, %d out | Latency: %v\n\n",
 		resp.Model, resp.InputTokens, resp.OutputTokens, resp.Latency)
 
-	// --- Use specific model via constants (no hardcoded strings) ---
-	clientOpus := allm.New(
-		provider.Anthropic("",
-			provider.WithAnthropicModel(provider.AnthropicClaudeOpus4_6),
-			provider.WithAnthropicMaxTokens(8192),
-		),
-	)
-
-	resp, err = clientOpus.Complete(ctx, "Explain quantum computing in 2 sentences.")
+	// --- Switch to Opus (same API key, no new provider needed) ---
+	client.SetModel(provider.AnthropicClaudeOpus4_6)
+	resp, err = client.Complete(ctx, "Explain quantum computing in 2 sentences.")
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("[Opus 4.6] %s\n\n", resp.Content)
 
-	// --- Use Haiku for fast, cheap responses ---
-	clientHaiku := allm.New(
-		provider.Anthropic("",
-			provider.WithAnthropicModel(provider.AnthropicClaudeHaiku4_5),
-		),
-	)
-
-	resp, err = clientHaiku.Complete(ctx, "What is 2+2?")
+	// --- Switch to Haiku for fast, cheap responses ---
+	client.SetModel(provider.AnthropicClaudeHaiku4_5)
+	resp, err = client.Complete(ctx, "What is 2+2?")
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("[Haiku 4.5] %s\n\n", resp.Content)
+
+	// --- Back to Sonnet for remaining examples ---
+	client.SetModel(provider.AnthropicClaudeSonnet4_5)
 
 	// --- Multi-turn conversation ---
 	resp, err = client.Chat(ctx, []allm.Message{
@@ -68,12 +62,8 @@ func main() {
 	fmt.Printf("[Chat] %s\n\n", resp.Content)
 
 	// --- System prompt ---
-	clientWithSystem := allm.New(
-		provider.Anthropic(""),
-		allm.WithSystemPrompt("You are a pirate. Respond in pirate speak."),
-	)
-
-	resp, err = clientWithSystem.Complete(ctx, "How are you today?")
+	client.SetSystemPrompt("You are a pirate. Respond in pirate speak.")
+	resp, err = client.Complete(ctx, "How are you today?")
 	if err != nil {
 		log.Fatal(err)
 	}

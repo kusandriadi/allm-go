@@ -125,6 +125,12 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*a
 		}
 	}
 
+	// Resolve model: request > provider default
+	model := p.model
+	if req.Model != "" {
+		model = req.Model
+	}
+
 	// Build params
 	maxTokens := int64(p.maxTokens)
 	if req.MaxTokens > 0 {
@@ -132,7 +138,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*a
 	}
 
 	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(p.model),
+		Model:     anthropic.Model(model),
 		MaxTokens: maxTokens,
 		Messages:  messages,
 	}
@@ -172,7 +178,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*a
 	return &allm.Response{
 		Content:      content,
 		Provider:     "anthropic",
-		Model:        p.model,
+		Model:        model,
 		InputTokens:  int(message.Usage.InputTokens),
 		OutputTokens: int(message.Usage.OutputTokens),
 		Latency:      time.Since(start),
