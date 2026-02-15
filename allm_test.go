@@ -1,0 +1,579 @@
+package allm
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+)
+
+// mockProvider for testing
+type mockProvider struct {
+	name      string
+	available bool
+	response  *Response
+	err       error
+	chunks    []StreamChunk
+	lastReq   *Request
+}
+
+func (m *mockProvider) Name() string {
+	return m.name
+}
+
+func (m *mockProvider) Available() bool {
+	return m.available
+}
+
+func (m *mockProvider) Complete(_ context.Context, req *Request) (*Response, error) {
+	m.lastReq = req
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.response, nil
+}
+
+func (m *mockProvider) Stream(_ context.Context, req *Request) <-chan StreamChunk {
+	m.lastReq = req
+	out := make(chan StreamChunk)
+	go func() {
+		defer close(out)
+		for _, chunk := range m.chunks {
+			out <- chunk
+		}
+	}()
+	return out
+}
+
+// mockModelLister implements both Provider and ModelLister
+type mockModelLister struct {
+	mockProvider
+	models []Model
+}
+
+func (m *mockModelLister) Models(_ context.Context) ([]Model, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.models, nil
+}
+
+// --- Client creation tests ---
+
+func TestNew(t *testing.T) {
+	p := &mockProvider{name: "test", available: true}
+	c := New(p)
+
+	if c.provider != p {
+		t.Error("provider not set")
+	}
+	if c.timeout != 60*time.Second {
+		t.Errorf("expected 60s timeout, got %v", c.timeout)
+	}
+	if c.maxInputLen != 100000 {
+		t.Errorf("expected 100000 maxInputLen, got %d", c.maxInputLen)
+	}
+}
+
+func TestNewWithOptions(t *testing.T) {
+	p := &mockProvider{name: "test", available: true}
+	c := New(p,
+		WithTimeout(30*time.Second),
+		WithMaxInputLen(50000),
+		WithSystemPrompt("Be helpful."),
+	)
+
+	if c.timeout != 30*time.Second {
+		t.Errorf("expected 30s timeout, got %v", c.timeout)
+	}
+	if c.maxInputLen != 50000 {
+		t.Errorf("expected 50000 maxInputLen, got %d", c.maxInputLen)
+	}
+	if c.systemPrompt != "Be helpful." {
+		t.Errorf("expected system prompt, got %q", c.systemPrompt)
+	}
+}
+
+func TestNewNilProvider(t *testing.T) {
+	c := New(nil)
+	if c.provider != nil {
+		t.Error("expected nil provider")
+	}
+}
+
+// --- Complete tests ---
+
+func TestCompleteNoProvider(t *testing.T) {
+	c := &Client{}
+	_, err := c.Complete(context.Background(), "test")
+	if !errors.Is(err, ErrNoProvider) {
+		t.Errorf("expected ErrNoProvider, got %v", err)
+	}
+}
+
+func TestCompleteEmptyInput(t *testing.T) {
+	p := &mockProvider{name: "test", available: true}
+	c := New(p)
+	_, err := c.Complete(context.Background(), "")
+	if !errors.Is(err, ErrEmptyInput) {
+		t.Errorf("expected ErrEmptyInput, got %v", err)
+	}
+}
+
+func TestCompleteInputTooLong(t *testing.T) {
+	p := &mockProvider{name: "test", available: true}
+	c := New(p, WithMaxInputLen(10))
+
+	longInput := "12345678901" // 11 chars > 10
+	_, err := c.Complete(context.Background(), longInput)
+	if !errors.Is(err, ErrInputTooLong) {
+		t.Errorf("expected ErrInputTooLong, got %v", err)
+	}
+}
+
+func TestCompleteInputExactLimit(t *testing.T) {
+	expected := &Response{Content: "OK", Provider: "test"}
+	p := &mockProvider{name: "test", available: true, response: expected}
+	c := New(p, WithMaxInputLen(10))
+
+	// Exactly 10 chars should work
+	_, err := c.Complete(context.Background(), "1234567890")
+	if err != nil {
+		t.Errorf("expected no error at exact limit, got %v", err)
+	}
+}
+
+func TestCompleteSuccess(t *testing.T) {
+	expected := &Response{
+		Content:      "Hello!",
+		Provider:     "test",
+		Model:        "test-model",
+		InputTokens:  10,
+		OutputTokens: 5,
+	}
+	p := &mockProvider{
+		name:      "test",
+		available: true,
+		response:  expected,
+	}
+	c := New(p)
+
+	resp, err := c.Complete(context.Background(), "Hi")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != expected.Content {
+		t.Errorf("expected %q, got %q", expected.Content, resp.Content)
+	}
+	if resp.Provider != "test" {
+		t.Errorf("expected provider 'test', got %q", resp.Provider)
+	}
+}
+
+func TestCompleteProviderError(t *testing.T) {
+	provErr := errors.New("api error")
+	p := &mockProvider{name: "test", available: true, err: provErr}
+	c := New(p)
+
+	_, err := c.Complete(context.Background(), "Hi")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if err != provErr {
+		t.Errorf("expected provider error, got %v", err)
+	}
+}
+
+func TestCompleteContextCanceled(t *testing.T) {
+	// Provider that respects context cancellation
+	p := &mockProvider{
+		name:      "test",
+		available: true,
+		err:       context.Canceled,
+	}
+	c := New(p)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	_, err := c.Complete(ctx, "Hi")
+	if err == nil {
+		t.Fatal("expected error for canceled context")
+	}
+	if !errors.Is(err, ErrCanceled) {
+		t.Errorf("expected ErrCanceled, got %v", err)
+	}
+}
+
+// --- Chat tests ---
+
+func TestChatSuccess(t *testing.T) {
+	expected := &Response{Content: "12", Provider: "test"}
+	p := &mockProvider{name: "test", available: true, response: expected}
+	c := New(p)
+
+	resp, err := c.Chat(context.Background(), []Message{
+		{Role: RoleUser, Content: "What is 2+2?"},
+		{Role: RoleAssistant, Content: "4"},
+		{Role: RoleUser, Content: "Multiply by 3"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "12" {
+		t.Errorf("expected '12', got %q", resp.Content)
+	}
+}
+
+func TestChatWithSystemPrompt(t *testing.T) {
+	expected := &Response{Content: "OK"}
+	p := &mockProvider{name: "test", available: true, response: expected}
+	c := New(p, WithSystemPrompt("You are helpful."))
+
+	_, err := c.Chat(context.Background(), []Message{
+		{Role: RoleUser, Content: "Hello"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify system prompt was prepended
+	if p.lastReq == nil {
+		t.Fatal("expected request to be captured")
+	}
+	if len(p.lastReq.Messages) != 2 {
+		t.Fatalf("expected 2 messages (system + user), got %d", len(p.lastReq.Messages))
+	}
+	if p.lastReq.Messages[0].Role != RoleSystem {
+		t.Errorf("expected first message to be system, got %q", p.lastReq.Messages[0].Role)
+	}
+	if p.lastReq.Messages[0].Content != "You are helpful." {
+		t.Errorf("expected system prompt content, got %q", p.lastReq.Messages[0].Content)
+	}
+}
+
+func TestChatEmptyMessages(t *testing.T) {
+	p := &mockProvider{name: "test", available: true}
+	c := New(p)
+
+	_, err := c.Chat(context.Background(), []Message{})
+	if !errors.Is(err, ErrEmptyInput) {
+		t.Errorf("expected ErrEmptyInput for empty messages, got %v", err)
+	}
+}
+
+func TestChatNoProvider(t *testing.T) {
+	c := &Client{}
+	_, err := c.Chat(context.Background(), []Message{
+		{Role: RoleUser, Content: "Hi"},
+	})
+	if !errors.Is(err, ErrNoProvider) {
+		t.Errorf("expected ErrNoProvider, got %v", err)
+	}
+}
+
+func TestChatInputTooLongWithImages(t *testing.T) {
+	p := &mockProvider{name: "test", available: true}
+	c := New(p, WithMaxInputLen(10))
+
+	_, err := c.Chat(context.Background(), []Message{
+		{
+			Role:    RoleUser,
+			Content: "Hi",
+			Images:  []Image{{MimeType: "image/png", Data: make([]byte, 20)}},
+		},
+	})
+	if !errors.Is(err, ErrInputTooLong) {
+		t.Errorf("expected ErrInputTooLong for large images, got %v", err)
+	}
+}
+
+// --- Stream tests ---
+
+func TestStream(t *testing.T) {
+	p := &mockProvider{
+		name:      "test",
+		available: true,
+		chunks: []StreamChunk{
+			{Content: "Hello"},
+			{Content: " world"},
+			{Done: true},
+		},
+	}
+	c := New(p)
+
+	var result string
+	for chunk := range c.Stream(context.Background(), []Message{
+		{Role: RoleUser, Content: "Hi"},
+	}) {
+		if chunk.Error != nil {
+			t.Fatalf("unexpected error: %v", chunk.Error)
+		}
+		result += chunk.Content
+	}
+
+	if result != "Hello world" {
+		t.Errorf("expected 'Hello world', got %q", result)
+	}
+}
+
+func TestStreamError(t *testing.T) {
+	testErr := errors.New("stream error")
+	p := &mockProvider{
+		name:      "test",
+		available: true,
+		chunks: []StreamChunk{
+			{Content: "Hello"},
+			{Error: testErr},
+		},
+	}
+	c := New(p)
+
+	var gotError error
+	for chunk := range c.Stream(context.Background(), []Message{
+		{Role: RoleUser, Content: "Hi"},
+	}) {
+		if chunk.Error != nil {
+			gotError = chunk.Error
+			break
+		}
+	}
+
+	if gotError == nil {
+		t.Error("expected error, got nil")
+	}
+}
+
+func TestStreamNoProvider(t *testing.T) {
+	c := &Client{}
+	var gotError error
+	for chunk := range c.Stream(context.Background(), []Message{
+		{Role: RoleUser, Content: "Hi"},
+	}) {
+		if chunk.Error != nil {
+			gotError = chunk.Error
+			break
+		}
+	}
+	if !errors.Is(gotError, ErrNoProvider) {
+		t.Errorf("expected ErrNoProvider, got %v", gotError)
+	}
+}
+
+func TestStreamEmptyInput(t *testing.T) {
+	p := &mockProvider{name: "test", available: true}
+	c := New(p)
+
+	var gotError error
+	for chunk := range c.Stream(context.Background(), []Message{}) {
+		if chunk.Error != nil {
+			gotError = chunk.Error
+			break
+		}
+	}
+	if !errors.Is(gotError, ErrEmptyInput) {
+		t.Errorf("expected ErrEmptyInput, got %v", gotError)
+	}
+}
+
+func TestStreamInputTooLong(t *testing.T) {
+	p := &mockProvider{name: "test", available: true}
+	c := New(p, WithMaxInputLen(5))
+
+	var gotError error
+	for chunk := range c.Stream(context.Background(), []Message{
+		{Role: RoleUser, Content: "123456"},
+	}) {
+		if chunk.Error != nil {
+			gotError = chunk.Error
+			break
+		}
+	}
+	if !errors.Is(gotError, ErrInputTooLong) {
+		t.Errorf("expected ErrInputTooLong, got %v", gotError)
+	}
+}
+
+// --- StreamToWriter tests ---
+
+func TestStreamToWriter(t *testing.T) {
+	p := &mockProvider{
+		name:      "test",
+		available: true,
+		chunks: []StreamChunk{
+			{Content: "Hello"},
+			{Content: " world"},
+			{Done: true},
+		},
+	}
+	c := New(p)
+
+	var buf bytes.Buffer
+	err := c.StreamToWriter(context.Background(), []Message{
+		{Role: RoleUser, Content: "Hi"},
+	}, &buf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if buf.String() != "Hello world" {
+		t.Errorf("expected 'Hello world', got %q", buf.String())
+	}
+}
+
+func TestStreamToWriterError(t *testing.T) {
+	testErr := errors.New("stream error")
+	p := &mockProvider{
+		name:      "test",
+		available: true,
+		chunks: []StreamChunk{
+			{Error: testErr},
+		},
+	}
+	c := New(p)
+
+	var buf bytes.Buffer
+	err := c.StreamToWriter(context.Background(), []Message{
+		{Role: RoleUser, Content: "Hi"},
+	}, &buf)
+	if err == nil {
+		t.Error("expected error, got nil")
+	}
+}
+
+// --- Provider management tests ---
+
+func TestSetProvider(t *testing.T) {
+	p1 := &mockProvider{name: "p1", available: true}
+	p2 := &mockProvider{name: "p2", available: true}
+	c := New(p1)
+
+	if c.Provider().Name() != "p1" {
+		t.Error("initial provider wrong")
+	}
+
+	c.SetProvider(p2)
+	if c.Provider().Name() != "p2" {
+		t.Error("provider not updated")
+	}
+}
+
+func TestSetSystemPrompt(t *testing.T) {
+	p := &mockProvider{name: "test", available: true}
+	c := New(p)
+
+	c.SetSystemPrompt("New prompt")
+	if c.systemPrompt != "New prompt" {
+		t.Error("system prompt not updated")
+	}
+}
+
+// --- Models tests ---
+
+func TestModelsSupported(t *testing.T) {
+	p := &mockModelLister{
+		mockProvider: mockProvider{name: "test", available: true},
+		models: []Model{
+			{ID: "model-1", Name: "Model One", Provider: "test"},
+			{ID: "model-2", Name: "Model Two", Provider: "test"},
+		},
+	}
+	c := New(p)
+
+	models, err := c.Models(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(models))
+	}
+	if models[0].ID != "model-1" {
+		t.Errorf("expected model-1, got %q", models[0].ID)
+	}
+}
+
+func TestModelsNotSupported(t *testing.T) {
+	p := &mockProvider{name: "test", available: true}
+	c := New(p)
+
+	_, err := c.Models(context.Background())
+	if err == nil {
+		t.Error("expected error for provider without ModelLister")
+	}
+	if !strings.Contains(err.Error(), "does not support model listing") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestModelsNoProvider(t *testing.T) {
+	c := &Client{}
+	_, err := c.Models(context.Background())
+	if !errors.Is(err, ErrNoProvider) {
+		t.Errorf("expected ErrNoProvider, got %v", err)
+	}
+}
+
+// --- Message/Image struct tests ---
+
+func TestMessageHasImages(t *testing.T) {
+	m1 := Message{Role: RoleUser, Content: "Hi"}
+	if len(m1.Images) != 0 {
+		t.Error("expected no images")
+	}
+
+	m2 := Message{
+		Role:    RoleUser,
+		Content: "Look at this",
+		Images:  []Image{{MimeType: "image/jpeg", Data: []byte{1, 2, 3}}},
+	}
+	if len(m2.Images) != 1 {
+		t.Error("expected 1 image")
+	}
+}
+
+func TestRoleConstants(t *testing.T) {
+	if RoleSystem != "system" {
+		t.Errorf("RoleSystem = %q", RoleSystem)
+	}
+	if RoleUser != "user" {
+		t.Errorf("RoleUser = %q", RoleUser)
+	}
+	if RoleAssistant != "assistant" {
+		t.Errorf("RoleAssistant = %q", RoleAssistant)
+	}
+}
+
+func TestVersion(t *testing.T) {
+	if Version == "" {
+		t.Error("Version should not be empty")
+	}
+}
+
+// --- Error sentinel tests ---
+
+func TestErrorSentinels(t *testing.T) {
+	errs := []struct {
+		name string
+		err  error
+	}{
+		{"ErrNoProvider", ErrNoProvider},
+		{"ErrEmptyInput", ErrEmptyInput},
+		{"ErrInputTooLong", ErrInputTooLong},
+		{"ErrRateLimited", ErrRateLimited},
+		{"ErrTimeout", ErrTimeout},
+		{"ErrCanceled", ErrCanceled},
+		{"ErrProvider", ErrProvider},
+	}
+
+	for _, tc := range errs {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.err == nil {
+				t.Errorf("%s should not be nil", tc.name)
+			}
+			if tc.err.Error() == "" {
+				t.Errorf("%s should have a message", tc.name)
+			}
+		})
+	}
+}
