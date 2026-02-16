@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"time"
 
@@ -137,6 +138,14 @@ func (p *LocalProvider) buildChatParams(req *allm.Request) openai.ChatCompletion
 		params.FrequencyPenalty = openai.Float(req.FrequencyPenalty)
 	}
 
+	if len(req.Stop) > 0 {
+		params.Stop = openai.ChatCompletionNewParamsStopUnion{OfStringArray: req.Stop}
+	}
+
+	if len(req.Tools) > 0 {
+		params.Tools = convertToolsToOpenAI(req.Tools)
+	}
+
 	return params
 }
 
@@ -153,25 +162,32 @@ func (p *LocalProvider) Complete(ctx context.Context, req *allm.Request) (*allm.
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
-		return nil, err
+		return nil, wrapOpenAIError(err)
 	}
 
-	content := ""
-	finishReason := ""
-	if len(completion.Choices) > 0 {
-		content = completion.Choices[0].Message.Content
-		finishReason = string(completion.Choices[0].FinishReason)
+	if len(completion.Choices) == 0 {
+		return nil, allm.ErrEmptyResponse
 	}
 
-	return &allm.Response{
-		Content:      content,
+	resp := &allm.Response{
+		Content:      completion.Choices[0].Message.Content,
 		Provider:     "local",
 		Model:        model,
 		InputTokens:  int(completion.Usage.PromptTokens),
 		OutputTokens: int(completion.Usage.CompletionTokens),
 		Latency:      time.Since(start),
-		FinishReason: finishReason,
-	}, nil
+		FinishReason: string(completion.Choices[0].FinishReason),
+	}
+
+	for _, tc := range completion.Choices[0].Message.ToolCalls {
+		resp.ToolCalls = append(resp.ToolCalls, allm.ToolCall{
+			ID:        tc.ID,
+			Name:      tc.Function.Name,
+			Arguments: json.RawMessage(tc.Function.Arguments),
+		})
+	}
+
+	return resp, nil
 }
 
 // Models returns available models from the local server.
@@ -272,18 +288,6 @@ func (p *LocalProvider) buildClient() openai.Client {
 }
 
 func (p *LocalProvider) convertMessages(msgs []allm.Message) []openai.ChatCompletionMessageParamUnion {
-	var messages []openai.ChatCompletionMessageParamUnion
-
-	for _, m := range msgs {
-		switch m.Role {
-		case allm.RoleSystem:
-			messages = append(messages, openai.SystemMessage(m.Content))
-		case allm.RoleUser:
-			messages = append(messages, openai.UserMessage(m.Content))
-		case allm.RoleAssistant:
-			messages = append(messages, openai.AssistantMessage(m.Content))
-		}
-	}
-
-	return messages
+	// Reuse the shared helper which handles tool messages
+	return convertToOpenAI(msgs)
 }

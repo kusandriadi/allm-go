@@ -3,12 +3,14 @@ package provider
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"os"
 	"time"
 
 	"github.com/kusandriadi/allm-go"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/shared"
 )
 
 // OpenAIProvider implements allm.Provider for OpenAI GPT models.
@@ -128,6 +130,10 @@ func (p *OpenAIProvider) buildChatParams(req *allm.Request) openai.ChatCompletio
 		params.Stop = openai.ChatCompletionNewParamsStopUnion{OfStringArray: req.Stop}
 	}
 
+	if len(req.Tools) > 0 {
+		params.Tools = convertToolsToOpenAI(req.Tools)
+	}
+
 	return params
 }
 
@@ -144,25 +150,32 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *allm.Request) (*allm
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
-		return nil, err
+		return nil, wrapOpenAIError(err)
 	}
 
-	content := ""
-	finishReason := ""
-	if len(completion.Choices) > 0 {
-		content = completion.Choices[0].Message.Content
-		finishReason = string(completion.Choices[0].FinishReason)
+	if len(completion.Choices) == 0 {
+		return nil, allm.ErrEmptyResponse
 	}
 
-	return &allm.Response{
-		Content:      content,
+	resp := &allm.Response{
+		Content:      completion.Choices[0].Message.Content,
 		Provider:     "openai",
 		Model:        model,
 		InputTokens:  int(completion.Usage.PromptTokens),
 		OutputTokens: int(completion.Usage.CompletionTokens),
 		Latency:      time.Since(start),
-		FinishReason: finishReason,
-	}, nil
+		FinishReason: string(completion.Choices[0].FinishReason),
+	}
+
+	for _, tc := range completion.Choices[0].Message.ToolCalls {
+		resp.ToolCalls = append(resp.ToolCalls, allm.ToolCall{
+			ID:        tc.ID,
+			Name:      tc.Function.Name,
+			Arguments: json.RawMessage(tc.Function.Arguments),
+		})
+	}
+
+	return resp, nil
 }
 
 // Models returns available models from OpenAI.
@@ -263,6 +276,14 @@ func (p *OpenAIProvider) convertMessages(msgs []allm.Message) []openai.ChatCompl
 	var messages []openai.ChatCompletionMessageParamUnion
 
 	for _, m := range msgs {
+		// Handle tool result messages
+		if m.Role == allm.RoleTool {
+			for _, tr := range m.ToolResults {
+				messages = append(messages, openai.ToolMessage(tr.Content, tr.ToolCallID))
+			}
+			continue
+		}
+
 		if len(m.Images) > 0 {
 			var parts []openai.ChatCompletionContentPartUnionParam
 
@@ -282,6 +303,25 @@ func (p *OpenAIProvider) convertMessages(msgs []allm.Message) []openai.ChatCompl
 			case allm.RoleUser:
 				messages = append(messages, openai.UserMessage(parts))
 			}
+		} else if len(m.ToolCalls) > 0 && m.Role == allm.RoleAssistant {
+			// Assistant message with tool calls
+			msg := openai.ChatCompletionAssistantMessageParam{
+				Content: openai.ChatCompletionAssistantMessageParamContentUnion{
+					OfString: openai.String(m.Content),
+				},
+			}
+			for _, tc := range m.ToolCalls {
+				msg.ToolCalls = append(msg.ToolCalls, openai.ChatCompletionMessageToolCallUnionParam{
+					OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
+						ID: tc.ID,
+						Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
+							Name:      tc.Name,
+							Arguments: string(tc.Arguments),
+						},
+					},
+				})
+			}
+			messages = append(messages, openai.ChatCompletionMessageParamUnion{OfAssistant: &msg})
 		} else {
 			switch m.Role {
 			case allm.RoleSystem:
@@ -295,4 +335,17 @@ func (p *OpenAIProvider) convertMessages(msgs []allm.Message) []openai.ChatCompl
 	}
 
 	return messages
+}
+
+// convertToolsToOpenAI converts allm.Tool definitions to OpenAI SDK format.
+func convertToolsToOpenAI(tools []allm.Tool) []openai.ChatCompletionToolUnionParam {
+	var result []openai.ChatCompletionToolUnionParam
+	for _, t := range tools {
+		result = append(result, openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
+			Name:        t.Name,
+			Description: openai.String(t.Description),
+			Parameters:  shared.FunctionParameters(t.Parameters),
+		}))
+	}
+	return result
 }

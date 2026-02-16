@@ -4,6 +4,10 @@ package provider
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -11,6 +15,18 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/kusandriadi/allm-go"
 )
+
+// wrapAnthropicError wraps Anthropic API errors with allm sentinel errors.
+func wrapAnthropicError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var apiErr *anthropic.Error
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusTooManyRequests {
+		return fmt.Errorf("%w: %w", allm.ErrRateLimited, err)
+	}
+	return err
+}
 
 // AnthropicProvider implements allm.Provider for Anthropic Claude.
 type AnthropicProvider struct {
@@ -102,6 +118,16 @@ func (p *AnthropicProvider) buildParams(req *allm.Request) (anthropic.MessageNew
 			continue
 		}
 
+		// Handle tool result messages — sent as user messages with tool_result blocks
+		if m.Role == allm.RoleTool {
+			var parts []anthropic.ContentBlockParamUnion
+			for _, tr := range m.ToolResults {
+				parts = append(parts, anthropic.NewToolResultBlock(tr.ToolCallID, tr.Content, tr.IsError))
+			}
+			messages = append(messages, anthropic.NewUserMessage(parts...))
+			continue
+		}
+
 		var parts []anthropic.ContentBlockParamUnion
 
 		if m.Content != "" {
@@ -111,6 +137,19 @@ func (p *AnthropicProvider) buildParams(req *allm.Request) (anthropic.MessageNew
 		for _, img := range m.Images {
 			data := base64.StdEncoding.EncodeToString(img.Data)
 			parts = append(parts, anthropic.NewImageBlockBase64(img.MimeType, data))
+		}
+
+		// Handle assistant messages with tool calls
+		for _, tc := range m.ToolCalls {
+			var input map[string]any
+			json.Unmarshal(tc.Arguments, &input)
+			parts = append(parts, anthropic.ContentBlockParamUnion{
+				OfToolUse: &anthropic.ToolUseBlockParam{
+					ID:    tc.ID,
+					Name:  tc.Name,
+					Input: input,
+				},
+			})
 		}
 
 		switch m.Role {
@@ -157,7 +196,40 @@ func (p *AnthropicProvider) buildParams(req *allm.Request) (anthropic.MessageNew
 		params.StopSequences = req.Stop
 	}
 
+	if len(req.Tools) > 0 {
+		for _, t := range req.Tools {
+			params.Tools = append(params.Tools, anthropic.ToolUnionParam{
+				OfTool: &anthropic.ToolParam{
+					Name:        t.Name,
+					Description: anthropic.String(t.Description),
+					InputSchema: anthropic.ToolInputSchemaParam{
+						Properties: t.Parameters["properties"],
+						Required:   toStringSlice(t.Parameters["required"]),
+					},
+				},
+			})
+		}
+	}
+
 	return params, nil
+}
+
+// toStringSlice converts an interface to []string for JSON schema required fields.
+func toStringSlice(v any) []string {
+	if v == nil {
+		return nil
+	}
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]string, 0, len(arr))
+	for _, item := range arr {
+		if s, ok := item.(string); ok {
+			result = append(result, s)
+		}
+	}
+	return result
 }
 
 // Complete sends a completion request.
@@ -176,23 +248,36 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*a
 
 	message, err := p.client.Messages.New(ctx, params)
 	if err != nil {
-		return nil, err
+		return nil, wrapAnthropicError(err)
 	}
 
-	content := ""
-	if len(message.Content) > 0 {
-		content = message.Content[0].Text
+	if len(message.Content) == 0 {
+		return nil, allm.ErrEmptyResponse
 	}
 
-	return &allm.Response{
-		Content:      content,
+	resp := &allm.Response{
 		Provider:     "anthropic",
 		Model:        model,
 		InputTokens:  int(message.Usage.InputTokens),
 		OutputTokens: int(message.Usage.OutputTokens),
 		Latency:      time.Since(start),
 		FinishReason: string(message.StopReason),
-	}, nil
+	}
+
+	for _, block := range message.Content {
+		switch block.Type {
+		case "text":
+			resp.Content += block.Text
+		case "tool_use":
+			resp.ToolCalls = append(resp.ToolCalls, allm.ToolCall{
+				ID:        block.ID,
+				Name:      block.Name,
+				Arguments: json.RawMessage(block.Input),
+			})
+		}
+	}
+
+	return resp, nil
 }
 
 // Models returns available models from Anthropic.

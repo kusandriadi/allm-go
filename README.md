@@ -142,6 +142,46 @@ resp, _ = client.Embed(ctx, "Hello", "World", "Foo")
 
 Supported by: OpenAI, GLM, Local (Ollama/vLLM). Not supported by: Anthropic, DeepSeek.
 
+### Tool Use (Function Calling)
+
+```go
+// 1. Define tools
+client := allm.New(
+    provider.OpenAI(""),
+    allm.WithTools(allm.Tool{
+        Name:        "get_weather",
+        Description: "Get current weather for a city",
+        Parameters: map[string]any{
+            "type": "object",
+            "properties": map[string]any{
+                "city": map[string]any{"type": "string", "description": "City name"},
+            },
+            "required": []any{"city"},
+        },
+    }),
+)
+
+// 2. Send request — model may return tool calls
+resp, _ := client.Complete(ctx, "What's the weather in Tokyo?")
+
+if len(resp.ToolCalls) > 0 {
+    tc := resp.ToolCalls[0]
+    fmt.Printf("Call: %s(%s)\n", tc.Name, tc.Arguments)
+
+    // 3. Execute tool and send result back
+    resp, _ = client.Chat(ctx, []allm.Message{
+        {Role: allm.RoleUser, Content: "What's the weather in Tokyo?"},
+        {Role: allm.RoleAssistant, ToolCalls: resp.ToolCalls},
+        {Role: allm.RoleTool, ToolResults: []allm.ToolResult{
+            {ToolCallID: tc.ID, Content: `{"temp": 22, "condition": "sunny"}`},
+        }},
+    })
+    fmt.Println(resp.Content) // "The weather in Tokyo is 22°C and sunny."
+}
+```
+
+Supported by all providers: Anthropic, OpenAI, DeepSeek, GLM, Local.
+
 ### Switch Model at Runtime
 
 ```go
@@ -272,6 +312,7 @@ if err != nil {
 | `SetModel(m)` | Switch model |
 | `SetProvider(p)` | Switch provider |
 | `SetSystemPrompt(s)` | Update system prompt |
+| `SetTools(tools...)` | Update available tools |
 
 ## Concurrency
 

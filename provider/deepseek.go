@@ -2,6 +2,10 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -9,6 +13,19 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 )
+
+// wrapOpenAIError wraps OpenAI-compatible API errors with allm sentinel errors.
+func wrapOpenAIError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var apiErr *openai.Error
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusTooManyRequests {
+		return fmt.Errorf("%w: %w", allm.ErrRateLimited, err)
+	}
+	return err
+}
+
 
 // DeepSeekProvider implements allm.Provider for DeepSeek models.
 type DeepSeekProvider struct {
@@ -114,6 +131,14 @@ func (p *DeepSeekProvider) buildChatParams(req *allm.Request) openai.ChatComplet
 		params.FrequencyPenalty = openai.Float(req.FrequencyPenalty)
 	}
 
+	if len(req.Stop) > 0 {
+		params.Stop = openai.ChatCompletionNewParamsStopUnion{OfStringArray: req.Stop}
+	}
+
+	if len(req.Tools) > 0 {
+		params.Tools = convertToolsToOpenAI(req.Tools)
+	}
+
 	return params
 }
 
@@ -130,25 +155,32 @@ func (p *DeepSeekProvider) Complete(ctx context.Context, req *allm.Request) (*al
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
-		return nil, err
+		return nil, wrapOpenAIError(err)
 	}
 
-	content := ""
-	finishReason := ""
-	if len(completion.Choices) > 0 {
-		content = completion.Choices[0].Message.Content
-		finishReason = string(completion.Choices[0].FinishReason)
+	if len(completion.Choices) == 0 {
+		return nil, allm.ErrEmptyResponse
 	}
 
-	return &allm.Response{
-		Content:      content,
+	resp := &allm.Response{
+		Content:      completion.Choices[0].Message.Content,
 		Provider:     "deepseek",
 		Model:        model,
 		InputTokens:  int(completion.Usage.PromptTokens),
 		OutputTokens: int(completion.Usage.CompletionTokens),
 		Latency:      time.Since(start),
-		FinishReason: finishReason,
-	}, nil
+		FinishReason: string(completion.Choices[0].FinishReason),
+	}
+
+	for _, tc := range completion.Choices[0].Message.ToolCalls {
+		resp.ToolCalls = append(resp.ToolCalls, allm.ToolCall{
+			ID:        tc.ID,
+			Name:      tc.Function.Name,
+			Arguments: json.RawMessage(tc.Function.Arguments),
+		})
+	}
+
+	return resp, nil
 }
 
 // Models returns available models from DeepSeek.
@@ -202,11 +234,41 @@ func (p *DeepSeekProvider) Stream(ctx context.Context, req *allm.Request) <-chan
 	return out
 }
 
-// convertToOpenAI is a helper shared by OpenAI-compatible providers.
+// convertToOpenAI is a helper shared by OpenAI-compatible providers (DeepSeek, GLM, Local).
 func convertToOpenAI(msgs []allm.Message) []openai.ChatCompletionMessageParamUnion {
 	var messages []openai.ChatCompletionMessageParamUnion
 
 	for _, m := range msgs {
+		// Handle tool result messages
+		if m.Role == allm.RoleTool {
+			for _, tr := range m.ToolResults {
+				messages = append(messages, openai.ToolMessage(tr.Content, tr.ToolCallID))
+			}
+			continue
+		}
+
+		// Handle assistant messages with tool calls
+		if len(m.ToolCalls) > 0 && m.Role == allm.RoleAssistant {
+			msg := openai.ChatCompletionAssistantMessageParam{
+				Content: openai.ChatCompletionAssistantMessageParamContentUnion{
+					OfString: openai.String(m.Content),
+				},
+			}
+			for _, tc := range m.ToolCalls {
+				msg.ToolCalls = append(msg.ToolCalls, openai.ChatCompletionMessageToolCallUnionParam{
+					OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
+						ID: tc.ID,
+						Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
+							Name:      tc.Name,
+							Arguments: string(tc.Arguments),
+						},
+					},
+				})
+			}
+			messages = append(messages, openai.ChatCompletionMessageParamUnion{OfAssistant: &msg})
+			continue
+		}
+
 		switch m.Role {
 		case allm.RoleSystem:
 			messages = append(messages, openai.SystemMessage(m.Content))

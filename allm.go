@@ -27,6 +27,7 @@ package allm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"sync"
@@ -44,7 +45,8 @@ var (
 	ErrRateLimited  = errors.New("allm: rate limited")
 	ErrTimeout      = errors.New("allm: request timeout")
 	ErrCanceled     = errors.New("allm: request canceled")
-	ErrProvider     = errors.New("allm: provider error")
+	ErrProvider       = errors.New("allm: provider error")
+	ErrEmptyResponse  = errors.New("allm: empty response from provider")
 )
 
 // Role constants for messages
@@ -56,9 +58,11 @@ const (
 
 // Message represents a chat message.
 type Message struct {
-	Role    string  // "system", "user", or "assistant"
-	Content string  // Text content
-	Images  []Image // Optional images (for vision models)
+	Role        string       // "system", "user", "assistant", or "tool"
+	Content     string       // Text content
+	Images      []Image      // Optional images (for vision models)
+	ToolCalls   []ToolCall   // Tool calls requested by assistant (role=assistant)
+	ToolResults []ToolResult // Tool results from user (role=tool)
 }
 
 // Image represents an image for vision models.
@@ -66,6 +70,30 @@ type Image struct {
 	MimeType string // e.g., "image/jpeg", "image/png"
 	Data     []byte // Raw image bytes (will be base64 encoded)
 }
+
+// Tool defines a function that the model can call.
+type Tool struct {
+	Name        string         // Function name (e.g., "get_weather")
+	Description string         // What the function does
+	Parameters  map[string]any // JSON Schema for parameters
+}
+
+// ToolCall represents a function call requested by the model.
+type ToolCall struct {
+	ID        string          // Unique call ID (used to match results)
+	Name      string          // Function name the model wants to call
+	Arguments json.RawMessage // JSON arguments from the model
+}
+
+// ToolResult contains the result of a tool call, sent back to the model.
+type ToolResult struct {
+	ToolCallID string // Must match ToolCall.ID
+	Content    string // Result content
+	IsError    bool   // True if the tool call failed
+}
+
+// RoleTool is the role for messages carrying tool results.
+const RoleTool = "tool"
 
 // Request contains parameters for an LLM request.
 type Request struct {
@@ -77,11 +105,13 @@ type Request struct {
 	Stop             []string // Stop sequences
 	PresencePenalty  float64  // Presence penalty (-2.0 to 2.0, 0 = default)
 	FrequencyPenalty float64  // Frequency penalty (-2.0 to 2.0, 0 = default)
+	Tools            []Tool   // Available tools the model can call
 }
 
 // Response contains the LLM response.
 type Response struct {
 	Content      string        // Generated text
+	ToolCalls    []ToolCall    // Tool calls requested by the model (when FinishReason is "tool_use" or "tool_calls")
 	Provider     string        // Provider name (e.g., "anthropic")
 	Model        string        // Model used (e.g., "claude-sonnet-4-20250514")
 	InputTokens  int           // Tokens in input
@@ -136,7 +166,7 @@ type ModelLister interface {
 }
 
 // Embedder is an optional interface providers can implement for text embeddings.
-// Supported by: OpenAI, Local (Ollama/vLLM).
+// Supported by: OpenAI, GLM, Local (Ollama/vLLM).
 // Not supported by: Anthropic, DeepSeek.
 type Embedder interface {
 	// Embed generates embeddings for the given texts.
@@ -222,6 +252,13 @@ func WithEmbeddingModel(model string) Option {
 	}
 }
 
+// WithTools sets the tools available for function calling.
+func WithTools(tools ...Tool) Option {
+	return func(c *Client) {
+		c.tools = tools
+	}
+}
+
 // Client is the main interface for interacting with LLMs.
 // It is safe for concurrent use.
 type Client struct {
@@ -236,6 +273,7 @@ type Client struct {
 	presencePenalty  float64 // default presence penalty
 	frequencyPenalty float64 // default frequency penalty
 	embeddingModel   string  // default embedding model
+	tools            []Tool  // available tools for function calling
 }
 
 // clientState holds a snapshot of client fields for use without holding the lock.
@@ -250,6 +288,7 @@ type clientState struct {
 	presencePenalty  float64
 	frequencyPenalty float64
 	embeddingModel   string
+	tools            []Tool
 }
 
 // snapshot captures the current client state under a read lock.
@@ -267,6 +306,7 @@ func (c *Client) snapshot() clientState {
 		presencePenalty:  c.presencePenalty,
 		frequencyPenalty: c.frequencyPenalty,
 		embeddingModel:   c.embeddingModel,
+		tools:            c.tools,
 	}
 }
 
@@ -286,13 +326,20 @@ func New(provider Provider, opts ...Option) *Client {
 // validateMessages checks message constraints.
 func validateMessages(messages []Message, maxInputLen int) error {
 	totalLen := 0
+	hasContent := false
 	for _, m := range messages {
 		totalLen += len(m.Content)
 		for _, img := range m.Images {
 			totalLen += len(img.Data)
 		}
+		for _, tr := range m.ToolResults {
+			totalLen += len(tr.Content)
+		}
+		if m.Content != "" || len(m.Images) > 0 || len(m.ToolCalls) > 0 || len(m.ToolResults) > 0 {
+			hasContent = true
+		}
 	}
-	if totalLen == 0 {
+	if !hasContent {
 		return ErrEmptyInput
 	}
 	if totalLen > maxInputLen {
@@ -314,6 +361,7 @@ func buildRequest(messages []Message, s clientState) *Request {
 		Temperature:      s.temperature,
 		PresencePenalty:  s.presencePenalty,
 		FrequencyPenalty: s.frequencyPenalty,
+		Tools:            s.tools,
 	}
 }
 
@@ -341,6 +389,9 @@ func (c *Client) Chat(ctx context.Context, messages []Message) (*Response, error
 
 	resp, err := s.provider.Complete(ctx, req)
 	if err != nil {
+		if errors.Is(err, ErrRateLimited) {
+			return nil, err
+		}
 		if ctx.Err() == context.DeadlineExceeded {
 			return nil, ErrTimeout
 		}
@@ -483,5 +534,12 @@ func (c *Client) SetModel(model string) {
 func (c *Client) SetSystemPrompt(prompt string) {
 	c.mu.Lock()
 	c.systemPrompt = prompt
+	c.mu.Unlock()
+}
+
+// SetTools updates the available tools for function calling.
+func (c *Client) SetTools(tools ...Tool) {
+	c.mu.Lock()
+	c.tools = tools
 	c.mu.Unlock()
 }

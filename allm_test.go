@@ -3,6 +3,7 @@ package allm
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -926,6 +927,7 @@ func TestErrorSentinels(t *testing.T) {
 		{"ErrTimeout", ErrTimeout},
 		{"ErrCanceled", ErrCanceled},
 		{"ErrProvider", ErrProvider},
+		{"ErrEmptyResponse", ErrEmptyResponse},
 	}
 
 	for _, tc := range errs {
@@ -937,5 +939,148 @@ func TestErrorSentinels(t *testing.T) {
 				t.Errorf("%s should have a message", tc.name)
 			}
 		})
+	}
+}
+
+// --- Rate limit and empty response tests ---
+
+func TestRateLimitedErrorPassesThrough(t *testing.T) {
+	// Simulate a provider returning a rate limit wrapped error
+	rateLimitErr := errors.Join(ErrRateLimited, errors.New("429 too many requests"))
+	p := &mockProvider{name: "test", available: true, err: rateLimitErr}
+	c := New(p)
+
+	_, err := c.Complete(context.Background(), "Hello")
+	if !errors.Is(err, ErrRateLimited) {
+		t.Errorf("expected ErrRateLimited, got %v", err)
+	}
+}
+
+func TestEmptyResponseError(t *testing.T) {
+	// Simulate a provider returning an empty response error
+	p := &mockProvider{name: "test", available: true, err: ErrEmptyResponse}
+	c := New(p)
+
+	_, err := c.Complete(context.Background(), "Hello")
+	if !errors.Is(err, ErrEmptyResponse) {
+		t.Errorf("expected ErrEmptyResponse, got %v", err)
+	}
+}
+
+// --- Tool use tests ---
+
+func TestToolTypes(t *testing.T) {
+	tool := Tool{
+		Name:        "get_weather",
+		Description: "Get current weather",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"city": map[string]any{"type": "string"},
+			},
+			"required": []any{"city"},
+		},
+	}
+
+	if tool.Name != "get_weather" {
+		t.Error("tool name not set")
+	}
+	if tool.Parameters["type"] != "object" {
+		t.Error("tool parameters not set")
+	}
+}
+
+func TestToolCallInResponse(t *testing.T) {
+	p := &mockProvider{
+		name: "test", available: true,
+		response: &Response{
+			Content:      "",
+			FinishReason: "tool_calls",
+			ToolCalls: []ToolCall{
+				{
+					ID:        "call_123",
+					Name:      "get_weather",
+					Arguments: json.RawMessage(`{"city":"Jakarta"}`),
+				},
+			},
+		},
+	}
+	c := New(p, WithTools(Tool{
+		Name:        "get_weather",
+		Description: "Get weather",
+		Parameters:  map[string]any{"type": "object"},
+	}))
+
+	resp, err := c.Complete(context.Background(), "What's the weather in Jakarta?")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].Name != "get_weather" {
+		t.Errorf("expected get_weather, got %q", resp.ToolCalls[0].Name)
+	}
+	if resp.ToolCalls[0].ID != "call_123" {
+		t.Errorf("expected call_123, got %q", resp.ToolCalls[0].ID)
+	}
+}
+
+func TestToolsFlowToRequest(t *testing.T) {
+	tools := []Tool{
+		{Name: "fn1", Description: "First"},
+		{Name: "fn2", Description: "Second"},
+	}
+	p := &mockProvider{name: "test", available: true, response: &Response{Content: "OK"}}
+	c := New(p, WithTools(tools...))
+
+	c.Complete(context.Background(), "Hi")
+
+	req := p.getLastReq()
+	if req == nil {
+		t.Fatal("expected request")
+	}
+	if len(req.Tools) != 2 {
+		t.Fatalf("expected 2 tools, got %d", len(req.Tools))
+	}
+	if req.Tools[0].Name != "fn1" {
+		t.Errorf("expected fn1, got %q", req.Tools[0].Name)
+	}
+}
+
+func TestSetTools(t *testing.T) {
+	p := &mockProvider{name: "test", available: true, response: &Response{Content: "OK"}}
+	c := New(p)
+
+	c.SetTools(Tool{Name: "fn1", Description: "First"})
+	c.Complete(context.Background(), "Hi")
+
+	req := p.getLastReq()
+	if len(req.Tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(req.Tools))
+	}
+}
+
+func TestToolResultMessageValidation(t *testing.T) {
+	p := &mockProvider{name: "test", available: true, response: &Response{Content: "OK"}}
+	c := New(p)
+
+	// Message with only tool results (no text content) should pass validation
+	_, err := c.Chat(context.Background(), []Message{
+		{
+			Role: RoleTool,
+			ToolResults: []ToolResult{
+				{ToolCallID: "call_123", Content: "32°C, sunny"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("tool result message should be valid, got: %v", err)
+	}
+}
+
+func TestRoleTool(t *testing.T) {
+	if RoleTool != "tool" {
+		t.Errorf("expected 'tool', got %q", RoleTool)
 	}
 }

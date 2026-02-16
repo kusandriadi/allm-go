@@ -1,7 +1,13 @@
 package provider
 
 import (
+	"errors"
+	"fmt"
+	"net/http"
 	"testing"
+
+	"github.com/kusandriadi/allm-go"
+	openai "github.com/openai/openai-go/v3"
 )
 
 // --- Anthropic ---
@@ -345,5 +351,48 @@ func TestVLLMWithOptions(t *testing.T) {
 	}
 	if p.maxTokens != 1024 {
 		t.Error("maxTokens not set")
+	}
+}
+
+// --- wrapOpenAIError ---
+
+func TestWrapOpenAIErrorRateLimit(t *testing.T) {
+	apiErr := &openai.Error{
+		StatusCode: http.StatusTooManyRequests,
+		Request:    &http.Request{},
+		Response:   &http.Response{StatusCode: http.StatusTooManyRequests},
+	}
+	wrapped := wrapOpenAIError(apiErr)
+	if !errors.Is(wrapped, allm.ErrRateLimited) {
+		t.Errorf("expected ErrRateLimited, got %v", wrapped)
+	}
+}
+
+func TestWrapOpenAIErrorNonRateLimit(t *testing.T) {
+	apiErr := &openai.Error{
+		StatusCode: http.StatusInternalServerError,
+		Request:    &http.Request{},
+		Response:   &http.Response{StatusCode: http.StatusInternalServerError},
+	}
+	wrapped := wrapOpenAIError(apiErr)
+	if errors.Is(wrapped, allm.ErrRateLimited) {
+		t.Error("should not be ErrRateLimited for 500")
+	}
+}
+
+func TestWrapOpenAIErrorNil(t *testing.T) {
+	if wrapOpenAIError(nil) != nil {
+		t.Error("nil error should return nil")
+	}
+}
+
+func TestWrapOpenAIErrorNonAPIError(t *testing.T) {
+	err := fmt.Errorf("network error")
+	wrapped := wrapOpenAIError(err)
+	if errors.Is(wrapped, allm.ErrRateLimited) {
+		t.Error("generic error should not be ErrRateLimited")
+	}
+	if wrapped.Error() != "network error" {
+		t.Errorf("expected original error, got %v", wrapped)
 	}
 }
