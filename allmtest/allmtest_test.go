@@ -204,7 +204,7 @@ func TestMockProviderConcurrency(t *testing.T) {
 	done := make(chan bool, 10)
 	for i := 0; i < 10; i++ {
 		go func() {
-			m.Complete(context.Background(), &allm.Request{
+			_, _ = m.Complete(context.Background(), &allm.Request{
 				Messages: []allm.Message{{Role: "user", Content: "Hi"}},
 			})
 			done <- true

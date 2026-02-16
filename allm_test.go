@@ -701,7 +701,7 @@ func TestConcurrentSetModelAndComplete(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c.Complete(context.Background(), "Hi")
+			_, _ = c.Complete(context.Background(), "Hi")
 		}()
 	}
 	wg.Wait()
@@ -875,7 +875,7 @@ func TestPenaltyParamsFlowToRequest(t *testing.T) {
 	p := &mockProvider{name: "test", available: true, response: &Response{Content: "OK"}}
 	c := New(p, WithPresencePenalty(0.5), WithFrequencyPenalty(0.3))
 
-	c.Complete(context.Background(), "Hi")
+	_, _ = c.Complete(context.Background(), "Hi")
 
 	req := p.getLastReq()
 	if req == nil {
@@ -1034,7 +1034,7 @@ func TestToolsFlowToRequest(t *testing.T) {
 	p := &mockProvider{name: "test", available: true, response: &Response{Content: "OK"}}
 	c := New(p, WithTools(tools...))
 
-	c.Complete(context.Background(), "Hi")
+	_, _ = c.Complete(context.Background(), "Hi")
 
 	req := p.getLastReq()
 	if req == nil {
@@ -1053,7 +1053,7 @@ func TestSetTools(t *testing.T) {
 	c := New(p)
 
 	c.SetTools(Tool{Name: "fn1", Description: "First"})
-	c.Complete(context.Background(), "Hi")
+	_, _ = c.Complete(context.Background(), "Hi")
 
 	req := p.getLastReq()
 	if len(req.Tools) != 1 {
@@ -1199,7 +1199,7 @@ func TestConcurrentSetToolsAndComplete(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			c.Complete(context.Background(), "Hi")
+			_, _ = c.Complete(context.Background(), "Hi")
 		}()
 	}
 	wg.Wait()
