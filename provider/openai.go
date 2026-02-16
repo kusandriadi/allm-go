@@ -3,14 +3,12 @@ package provider
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"os"
 	"time"
 
 	"github.com/kusandriadi/allm-go"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
-	"github.com/openai/openai-go/v3/shared"
 )
 
 // OpenAIProvider implements allm.Provider for OpenAI GPT models.
@@ -87,6 +85,7 @@ func (p *OpenAIProvider) Available() bool {
 }
 
 // buildChatParams builds ChatCompletionNewParams from an allm.Request.
+// OpenAI has its own buildChatParams because it handles image messages.
 func (p *OpenAIProvider) buildChatParams(req *allm.Request) openai.ChatCompletionNewParams {
 	messages := p.convertMessages(req.Messages)
 
@@ -153,80 +152,17 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *allm.Request) (*allm
 		return nil, wrapOpenAIError(err)
 	}
 
-	if len(completion.Choices) == 0 {
-		return nil, allm.ErrEmptyResponse
-	}
-
-	resp := &allm.Response{
-		Content:      completion.Choices[0].Message.Content,
-		Provider:     "openai",
-		Model:        model,
-		InputTokens:  int(completion.Usage.PromptTokens),
-		OutputTokens: int(completion.Usage.CompletionTokens),
-		Latency:      time.Since(start),
-		FinishReason: string(completion.Choices[0].FinishReason),
-	}
-
-	for _, tc := range completion.Choices[0].Message.ToolCalls {
-		resp.ToolCalls = append(resp.ToolCalls, allm.ToolCall{
-			ID:        tc.ID,
-			Name:      tc.Function.Name,
-			Arguments: json.RawMessage(tc.Function.Arguments),
-		})
-	}
-
-	return resp, nil
+	return openaiCompleteResponse(completion, "openai", model, start)
 }
 
 // Models returns available models from OpenAI.
 func (p *OpenAIProvider) Models(ctx context.Context) ([]allm.Model, error) {
-	page, err := p.client.Models.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	var models []allm.Model
-	for _, m := range page.Data {
-		models = append(models, allm.Model{
-			ID:       m.ID,
-			Name:     m.ID,
-			Provider: "openai",
-		})
-	}
-	return models, nil
+	return openaiListModels(ctx, p.client, "openai")
 }
 
 // Embed generates embeddings using the OpenAI Embeddings API.
 func (p *OpenAIProvider) Embed(ctx context.Context, req *allm.EmbedRequest) (*allm.EmbedResponse, error) {
-	start := time.Now()
-
-	model := "text-embedding-3-small"
-	if req.Model != "" {
-		model = req.Model
-	}
-
-	resp, err := p.client.Embeddings.New(ctx, openai.EmbeddingNewParams{
-		Input: openai.EmbeddingNewParamsInputUnion{
-			OfArrayOfStrings: req.Input,
-		},
-		Model: openai.EmbeddingModel(model),
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	embeddings := make([][]float64, len(resp.Data))
-	for i, e := range resp.Data {
-		embeddings[i] = e.Embedding
-	}
-
-	return &allm.EmbedResponse{
-		Embeddings:  embeddings,
-		Model:       model,
-		Provider:    "openai",
-		InputTokens: int(resp.Usage.TotalTokens),
-		Latency:     time.Since(start),
-	}, nil
+	return openaiEmbed(ctx, p.client, req, "text-embedding-3-small", "openai")
 }
 
 // Stream sends a real streaming request using the OpenAI SDK.
@@ -239,24 +175,7 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *allm.Request) <-chan a
 		params := p.buildChatParams(req)
 
 		stream := p.client.Chat.Completions.NewStreaming(ctx, params)
-		defer stream.Close()
-
-		for stream.Next() {
-			chunk := stream.Current()
-			if len(chunk.Choices) > 0 {
-				content := chunk.Choices[0].Delta.Content
-				if content != "" {
-					out <- allm.StreamChunk{Content: content}
-				}
-			}
-		}
-
-		if err := stream.Err(); err != nil {
-			out <- allm.StreamChunk{Error: err}
-			return
-		}
-
-		out <- allm.StreamChunk{Done: true}
+		openaiStreamLoop(stream, out)
 	}()
 
 	return out
@@ -272,6 +191,9 @@ func (p *OpenAIProvider) buildClient() openai.Client {
 	return openai.NewClient(opts...)
 }
 
+// convertMessages converts allm messages to OpenAI format with image support.
+// OpenAI's convertMessages is separate from the shared convertToOpenAI because
+// it handles vision (image) content parts.
 func (p *OpenAIProvider) convertMessages(msgs []allm.Message) []openai.ChatCompletionMessageParamUnion {
 	var messages []openai.ChatCompletionMessageParamUnion
 
@@ -335,17 +257,4 @@ func (p *OpenAIProvider) convertMessages(msgs []allm.Message) []openai.ChatCompl
 	}
 
 	return messages
-}
-
-// convertToolsToOpenAI converts allm.Tool definitions to OpenAI SDK format.
-func convertToolsToOpenAI(tools []allm.Tool) []openai.ChatCompletionToolUnionParam {
-	var result []openai.ChatCompletionToolUnionParam
-	for _, t := range tools {
-		result = append(result, openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
-			Name:        t.Name,
-			Description: openai.String(t.Description),
-			Parameters:  shared.FunctionParameters(t.Parameters),
-		}))
-	}
-	return result
 }

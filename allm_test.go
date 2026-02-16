@@ -1084,3 +1084,545 @@ func TestRoleTool(t *testing.T) {
 		t.Errorf("expected 'tool', got %q", RoleTool)
 	}
 }
+
+// --- Additional tool use tests ---
+
+func TestChatWithToolMessages(t *testing.T) {
+	// Simulate a full tool use conversation flow:
+	// user → assistant with tool calls → tool results → assistant final answer
+	p := &mockProvider{
+		name: "test", available: true,
+		response: &Response{Content: "The weather is 32°C and sunny."},
+	}
+	c := New(p)
+
+	_, err := c.Chat(context.Background(), []Message{
+		{Role: RoleUser, Content: "What's the weather in Jakarta?"},
+		{
+			Role: RoleAssistant,
+			ToolCalls: []ToolCall{
+				{ID: "call_1", Name: "get_weather", Arguments: json.RawMessage(`{"city":"Jakarta"}`)},
+			},
+		},
+		{
+			Role: RoleTool,
+			ToolResults: []ToolResult{
+				{ToolCallID: "call_1", Content: `{"temp":32,"condition":"sunny"}`},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	req := p.getLastReq()
+	if req == nil {
+		t.Fatal("expected request to be captured")
+	}
+	// System prompt not set, so messages should be: user + assistant + tool = 3
+	// (with system prompt it would be 4)
+	if len(req.Messages) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(req.Messages))
+	}
+	if req.Messages[2].Role != RoleTool {
+		t.Errorf("expected tool role, got %q", req.Messages[2].Role)
+	}
+}
+
+func TestValidateMessagesWithToolResults(t *testing.T) {
+	p := &mockProvider{name: "test", available: true, response: &Response{Content: "OK"}}
+	c := New(p, WithMaxInputLen(20))
+
+	// Tool result content counts toward input length
+	_, err := c.Chat(context.Background(), []Message{
+		{
+			Role: RoleTool,
+			ToolResults: []ToolResult{
+				{ToolCallID: "call_1", Content: strings.Repeat("x", 21)},
+			},
+		},
+	})
+	if !errors.Is(err, ErrInputTooLong) {
+		t.Errorf("expected ErrInputTooLong for large tool result, got %v", err)
+	}
+}
+
+func TestBuildRequestIncludesTools(t *testing.T) {
+	tools := []Tool{
+		{Name: "fn1", Description: "First"},
+	}
+	s := clientState{
+		provider: &mockProvider{name: "test", available: true},
+		tools:    tools,
+	}
+
+	msgs := []Message{{Role: RoleUser, Content: "Hi"}}
+	req := buildRequest(msgs, s)
+
+	if len(req.Tools) != 1 {
+		t.Fatalf("expected 1 tool in request, got %d", len(req.Tools))
+	}
+	if req.Tools[0].Name != "fn1" {
+		t.Errorf("expected fn1, got %q", req.Tools[0].Name)
+	}
+}
+
+func TestWithToolsOption(t *testing.T) {
+	tools := []Tool{
+		{Name: "fn1", Description: "First"},
+		{Name: "fn2", Description: "Second"},
+	}
+	p := &mockProvider{name: "test", available: true}
+	c := New(p, WithTools(tools...))
+
+	if len(c.tools) != 2 {
+		t.Fatalf("expected 2 tools, got %d", len(c.tools))
+	}
+	if c.tools[0].Name != "fn1" {
+		t.Errorf("expected fn1, got %q", c.tools[0].Name)
+	}
+	if c.tools[1].Name != "fn2" {
+		t.Errorf("expected fn2, got %q", c.tools[1].Name)
+	}
+}
+
+func TestConcurrentSetToolsAndComplete(t *testing.T) {
+	p := &mockProvider{name: "test", available: true, response: &Response{Content: "OK"}}
+	c := New(p)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			c.SetTools(Tool{Name: "fn1", Description: "First"})
+		}()
+		go func() {
+			defer wg.Done()
+			c.Complete(context.Background(), "Hi")
+		}()
+	}
+	wg.Wait()
+}
+
+func TestCompleteTimeout(t *testing.T) {
+	slowProvider := &slowMockProvider{
+		name:     "test",
+		delay:    2 * time.Second,
+		response: &Response{Content: "OK"},
+	}
+	c := New(slowProvider, WithTimeout(50*time.Millisecond))
+
+	_, err := c.Complete(context.Background(), "Hi")
+	if !errors.Is(err, ErrTimeout) {
+		t.Errorf("expected ErrTimeout, got %v", err)
+	}
+}
+
+// slowMockProvider simulates a provider that takes a long time to respond.
+type slowMockProvider struct {
+	name     string
+	delay    time.Duration
+	response *Response
+}
+
+func (m *slowMockProvider) Name() string    { return m.name }
+func (m *slowMockProvider) Available() bool { return true }
+
+func (m *slowMockProvider) Complete(ctx context.Context, req *Request) (*Response, error) {
+	select {
+	case <-time.After(m.delay):
+		return m.response, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (m *slowMockProvider) Stream(_ context.Context, req *Request) <-chan StreamChunk {
+	out := make(chan StreamChunk)
+	close(out)
+	return out
+}
+
+// --- Retry and Logging test helpers ---
+
+// failNProvider fails the first N calls with the given error, then succeeds.
+type failNProvider struct {
+	mu        sync.Mutex
+	name      string
+	failCount int
+	failErr   error
+	response  *Response
+	calls     int
+}
+
+func (p *failNProvider) Name() string    { return p.name }
+func (p *failNProvider) Available() bool { return true }
+
+func (p *failNProvider) Complete(_ context.Context, _ *Request) (*Response, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls++
+	if p.calls <= p.failCount {
+		return nil, p.failErr
+	}
+	return p.response, nil
+}
+
+func (p *failNProvider) Stream(_ context.Context, _ *Request) <-chan StreamChunk {
+	out := make(chan StreamChunk)
+	close(out)
+	return out
+}
+
+func (p *failNProvider) getCalls() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+// failNEmbedder fails the first N Embed calls, then succeeds.
+type failNEmbedder struct {
+	failNProvider
+	embedResp *EmbedResponse
+	embedErr  error
+	embedCall int
+	embedFail int
+}
+
+func (e *failNEmbedder) Embed(_ context.Context, _ *EmbedRequest) (*EmbedResponse, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.embedCall++
+	if e.embedCall <= e.embedFail {
+		return nil, e.embedErr
+	}
+	return e.embedResp, nil
+}
+
+// mockLogger records log calls.
+type mockLogger struct {
+	mu      sync.Mutex
+	infos   []string
+	warns   []string
+	errors_ []string
+}
+
+func (l *mockLogger) Info(msg string, args ...any) {
+	l.mu.Lock()
+	l.infos = append(l.infos, msg)
+	l.mu.Unlock()
+}
+func (l *mockLogger) Warn(msg string, args ...any) {
+	l.mu.Lock()
+	l.warns = append(l.warns, msg)
+	l.mu.Unlock()
+}
+func (l *mockLogger) Error(msg string, args ...any) {
+	l.mu.Lock()
+	l.errors_ = append(l.errors_, msg)
+	l.mu.Unlock()
+}
+
+func (l *mockLogger) infoCount() int  { l.mu.Lock(); defer l.mu.Unlock(); return len(l.infos) }
+func (l *mockLogger) warnCount() int  { l.mu.Lock(); defer l.mu.Unlock(); return len(l.warns) }
+func (l *mockLogger) errorCount() int { l.mu.Lock(); defer l.mu.Unlock(); return len(l.errors_) }
+
+// --- Retry tests ---
+
+func TestRetryOnRateLimit(t *testing.T) {
+	p := &failNProvider{
+		name:      "test",
+		failCount: 1,
+		failErr:   ErrRateLimited,
+		response:  &Response{Content: "OK", Provider: "test"},
+	}
+	c := New(p,
+		WithMaxRetries(2),
+		WithRetryBaseDelay(1*time.Millisecond),
+		WithRetryMaxDelay(10*time.Millisecond),
+	)
+
+	resp, err := c.Complete(context.Background(), "Hi")
+	if err != nil {
+		t.Fatalf("expected success after retry, got %v", err)
+	}
+	if resp.Content != "OK" {
+		t.Errorf("expected OK, got %q", resp.Content)
+	}
+	if p.getCalls() != 2 {
+		t.Errorf("expected 2 calls, got %d", p.getCalls())
+	}
+}
+
+func TestRetryOnTimeout(t *testing.T) {
+	fp := &failNProvider{
+		name:      "test",
+		failCount: 1,
+		failErr:   ErrTimeout,
+		response:  &Response{Content: "OK", Provider: "test"},
+	}
+
+	c := New(fp,
+		WithMaxRetries(2),
+		WithRetryBaseDelay(1*time.Millisecond),
+		WithRetryMaxDelay(10*time.Millisecond),
+	)
+
+	resp, err := c.Complete(context.Background(), "Hi")
+	if err != nil {
+		t.Fatalf("expected success after retry, got %v", err)
+	}
+	if resp.Content != "OK" {
+		t.Errorf("expected OK, got %q", resp.Content)
+	}
+	if fp.getCalls() != 2 {
+		t.Errorf("expected 2 calls, got %d", fp.getCalls())
+	}
+}
+
+func TestRetryExhausted(t *testing.T) {
+	p := &failNProvider{
+		name:      "test",
+		failCount: 10, // always fail
+		failErr:   ErrRateLimited,
+		response:  &Response{Content: "OK"},
+	}
+	c := New(p,
+		WithMaxRetries(2),
+		WithRetryBaseDelay(1*time.Millisecond),
+		WithRetryMaxDelay(10*time.Millisecond),
+	)
+
+	_, err := c.Complete(context.Background(), "Hi")
+	if !errors.Is(err, ErrRateLimited) {
+		t.Errorf("expected ErrRateLimited, got %v", err)
+	}
+	if p.getCalls() != 3 { // 1 initial + 2 retries
+		t.Errorf("expected 3 calls, got %d", p.getCalls())
+	}
+}
+
+func TestRetryNotOnCanceled(t *testing.T) {
+	p := &failNProvider{
+		name:      "test",
+		failCount: 10,
+		failErr:   ErrCanceled,
+		response:  &Response{Content: "OK"},
+	}
+	c := New(p,
+		WithMaxRetries(2),
+		WithRetryBaseDelay(1*time.Millisecond),
+	)
+
+	_, err := c.Complete(context.Background(), "Hi")
+	if !errors.Is(err, ErrCanceled) {
+		t.Errorf("expected ErrCanceled, got %v", err)
+	}
+	// Should NOT retry — only 1 call
+	if p.getCalls() != 1 {
+		t.Errorf("expected 1 call (no retry for canceled), got %d", p.getCalls())
+	}
+}
+
+func TestRetryNotOnEmptyInput(t *testing.T) {
+	p := &mockProvider{name: "test", available: true, response: &Response{Content: "OK"}}
+	c := New(p, WithMaxRetries(2))
+
+	_, err := c.Complete(context.Background(), "")
+	if !errors.Is(err, ErrEmptyInput) {
+		t.Errorf("expected ErrEmptyInput, got %v", err)
+	}
+}
+
+func TestRetryBackoffDelay(t *testing.T) {
+	p := &failNProvider{
+		name:      "test",
+		failCount: 3,
+		failErr:   ErrRateLimited,
+		response:  &Response{Content: "OK"},
+	}
+	c := New(p,
+		WithMaxRetries(3),
+		WithRetryBaseDelay(10*time.Millisecond),
+		WithRetryMaxDelay(1*time.Second),
+	)
+
+	start := time.Now()
+	resp, err := c.Complete(context.Background(), "Hi")
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if resp.Content != "OK" {
+		t.Errorf("expected OK, got %q", resp.Content)
+	}
+	// 3 retries: ~10ms + ~20ms + ~40ms = ~70ms minimum (without jitter max)
+	// With 25% jitter max: ~87ms max
+	// Be generous with bounds for CI
+	if elapsed < 30*time.Millisecond {
+		t.Errorf("expected backoff delay, but elapsed only %v", elapsed)
+	}
+}
+
+func TestNoRetryByDefault(t *testing.T) {
+	p := &failNProvider{
+		name:      "test",
+		failCount: 10,
+		failErr:   ErrRateLimited,
+		response:  &Response{Content: "OK"},
+	}
+	c := New(p) // no WithMaxRetries
+
+	_, err := c.Complete(context.Background(), "Hi")
+	if !errors.Is(err, ErrRateLimited) {
+		t.Errorf("expected ErrRateLimited, got %v", err)
+	}
+	if p.getCalls() != 1 {
+		t.Errorf("expected 1 call (no retries by default), got %d", p.getCalls())
+	}
+}
+
+// --- Logger tests ---
+
+func TestLoggerCalledOnSuccess(t *testing.T) {
+	p := &mockProvider{
+		name: "test", available: true,
+		response: &Response{Content: "OK", Provider: "test"},
+	}
+	logger := &mockLogger{}
+	c := New(p, WithLogger(logger))
+
+	_, err := c.Complete(context.Background(), "Hi")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if logger.infoCount() != 1 {
+		t.Errorf("expected 1 info log, got %d", logger.infoCount())
+	}
+}
+
+func TestLoggerCalledOnError(t *testing.T) {
+	p := &mockProvider{
+		name: "test", available: true,
+		err: errors.New("provider error"),
+	}
+	logger := &mockLogger{}
+	c := New(p, WithLogger(logger))
+
+	_, err := c.Complete(context.Background(), "Hi")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if logger.errorCount() != 1 {
+		t.Errorf("expected 1 error log, got %d", logger.errorCount())
+	}
+}
+
+// --- Hook tests ---
+
+func TestHookCalledOnSuccess(t *testing.T) {
+	p := &mockProvider{
+		name: "test", available: true,
+		response: &Response{Content: "OK", Provider: "test", InputTokens: 5, OutputTokens: 3},
+	}
+	var events []HookEvent
+	var mu sync.Mutex
+	hook := func(e HookEvent) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	}
+	c := New(p, WithHook(hook))
+
+	_, err := c.Complete(context.Background(), "Hi")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events (request + success), got %d", len(events))
+	}
+	if events[0].Type != HookRequest {
+		t.Errorf("expected HookRequest, got %q", events[0].Type)
+	}
+	if events[1].Type != HookSuccess {
+		t.Errorf("expected HookSuccess, got %q", events[1].Type)
+	}
+	if events[1].InputTokens != 5 {
+		t.Errorf("expected 5 input tokens, got %d", events[1].InputTokens)
+	}
+}
+
+func TestHookCalledOnRetry(t *testing.T) {
+	p := &failNProvider{
+		name:      "test",
+		failCount: 1,
+		failErr:   ErrRateLimited,
+		response:  &Response{Content: "OK", Provider: "test"},
+	}
+	var events []HookEvent
+	var mu sync.Mutex
+	hook := func(e HookEvent) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	}
+	c := New(p,
+		WithMaxRetries(2),
+		WithRetryBaseDelay(1*time.Millisecond),
+		WithHook(hook),
+	)
+
+	_, err := c.Complete(context.Background(), "Hi")
+	if err != nil {
+		t.Fatalf("expected success after retry, got %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	// Expected: HookRequest, HookRetry, HookSuccess
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events, got %d: %+v", len(events), events)
+	}
+	if events[0].Type != HookRequest {
+		t.Errorf("expected HookRequest, got %q", events[0].Type)
+	}
+	if events[1].Type != HookRetry {
+		t.Errorf("expected HookRetry, got %q", events[1].Type)
+	}
+	if events[1].Attempt != 2 {
+		t.Errorf("expected attempt 2, got %d", events[1].Attempt)
+	}
+	if events[2].Type != HookSuccess {
+		t.Errorf("expected HookSuccess, got %q", events[2].Type)
+	}
+}
+
+// --- Embed retry test ---
+
+func TestEmbedRetry(t *testing.T) {
+	p := &failNEmbedder{
+		failNProvider: failNProvider{name: "test"},
+		embedFail:     1,
+		embedErr:      ErrRateLimited,
+		embedResp: &EmbedResponse{
+			Embeddings: [][]float64{{0.1, 0.2}},
+			Provider:   "test",
+		},
+	}
+	c := New(p,
+		WithMaxRetries(2),
+		WithRetryBaseDelay(1*time.Millisecond),
+	)
+
+	resp, err := c.Embed(context.Background(), "Hello")
+	if err != nil {
+		t.Fatalf("expected success after retry, got %v", err)
+	}
+	if len(resp.Embeddings) != 1 {
+		t.Fatalf("expected 1 embedding, got %d", len(resp.Embeddings))
+	}
+}

@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"time"
 
@@ -79,58 +78,12 @@ func (p *GLMProvider) Available() bool {
 	return p.apiKey != ""
 }
 
-// buildChatParams builds ChatCompletionNewParams from an allm.Request.
-func (p *GLMProvider) buildChatParams(req *allm.Request) openai.ChatCompletionNewParams {
-	messages := convertToOpenAI(req.Messages)
-
-	model := p.model
-	if req.Model != "" {
-		model = req.Model
-	}
-
-	maxTokens := int64(p.maxTokens)
-	if req.MaxTokens > 0 {
-		maxTokens = int64(req.MaxTokens)
-	}
-
-	params := openai.ChatCompletionNewParams{
-		Model:     openai.ChatModel(model),
-		Messages:  messages,
-		MaxTokens: openai.Int(maxTokens),
-	}
-
-	temp := p.temperature
-	if req.Temperature > 0 {
-		temp = req.Temperature
-	}
-	if temp > 0 {
-		params.Temperature = openai.Float(temp)
-	}
-
-	if req.PresencePenalty != 0 {
-		params.PresencePenalty = openai.Float(req.PresencePenalty)
-	}
-
-	if req.FrequencyPenalty != 0 {
-		params.FrequencyPenalty = openai.Float(req.FrequencyPenalty)
-	}
-
-	if len(req.Stop) > 0 {
-		params.Stop = openai.ChatCompletionNewParamsStopUnion{OfStringArray: req.Stop}
-	}
-
-	if len(req.Tools) > 0 {
-		params.Tools = convertToolsToOpenAI(req.Tools)
-	}
-
-	return params
-}
-
 // Complete sends a completion request.
 func (p *GLMProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
 	start := time.Now()
 
-	params := p.buildChatParams(req)
+	messages := convertToOpenAI(req.Messages)
+	params := openaiChatParams(messages, req.Model, p.model, req.MaxTokens, p.maxTokens, req.Temperature, p.temperature, req)
 
 	model := p.model
 	if req.Model != "" {
@@ -142,80 +95,17 @@ func (p *GLMProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Re
 		return nil, wrapOpenAIError(err)
 	}
 
-	if len(completion.Choices) == 0 {
-		return nil, allm.ErrEmptyResponse
-	}
-
-	resp := &allm.Response{
-		Content:      completion.Choices[0].Message.Content,
-		Provider:     "glm",
-		Model:        model,
-		InputTokens:  int(completion.Usage.PromptTokens),
-		OutputTokens: int(completion.Usage.CompletionTokens),
-		Latency:      time.Since(start),
-		FinishReason: string(completion.Choices[0].FinishReason),
-	}
-
-	for _, tc := range completion.Choices[0].Message.ToolCalls {
-		resp.ToolCalls = append(resp.ToolCalls, allm.ToolCall{
-			ID:        tc.ID,
-			Name:      tc.Function.Name,
-			Arguments: json.RawMessage(tc.Function.Arguments),
-		})
-	}
-
-	return resp, nil
+	return openaiCompleteResponse(completion, "glm", model, start)
 }
 
 // Models returns available models from GLM.
 func (p *GLMProvider) Models(ctx context.Context) ([]allm.Model, error) {
-	page, err := p.client.Models.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	var models []allm.Model
-	for _, m := range page.Data {
-		models = append(models, allm.Model{
-			ID:       m.ID,
-			Name:     m.ID,
-			Provider: "glm",
-		})
-	}
-	return models, nil
+	return openaiListModels(ctx, p.client, "glm")
 }
 
 // Embed generates embeddings using the GLM Embeddings API.
 func (p *GLMProvider) Embed(ctx context.Context, req *allm.EmbedRequest) (*allm.EmbedResponse, error) {
-	start := time.Now()
-
-	model := "embedding-3"
-	if req.Model != "" {
-		model = req.Model
-	}
-
-	resp, err := p.client.Embeddings.New(ctx, openai.EmbeddingNewParams{
-		Input: openai.EmbeddingNewParamsInputUnion{
-			OfArrayOfStrings: req.Input,
-		},
-		Model: openai.EmbeddingModel(model),
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	embeddings := make([][]float64, len(resp.Data))
-	for i, e := range resp.Data {
-		embeddings[i] = e.Embedding
-	}
-
-	return &allm.EmbedResponse{
-		Embeddings:  embeddings,
-		Model:       model,
-		Provider:    "glm",
-		InputTokens: int(resp.Usage.TotalTokens),
-		Latency:     time.Since(start),
-	}, nil
+	return openaiEmbed(ctx, p.client, req, "embedding-3", "glm")
 }
 
 // Stream sends a real streaming request using the OpenAI-compatible SDK.
@@ -225,27 +115,11 @@ func (p *GLMProvider) Stream(ctx context.Context, req *allm.Request) <-chan allm
 	go func() {
 		defer close(out)
 
-		params := p.buildChatParams(req)
+		messages := convertToOpenAI(req.Messages)
+		params := openaiChatParams(messages, req.Model, p.model, req.MaxTokens, p.maxTokens, req.Temperature, p.temperature, req)
 
 		stream := p.client.Chat.Completions.NewStreaming(ctx, params)
-		defer stream.Close()
-
-		for stream.Next() {
-			chunk := stream.Current()
-			if len(chunk.Choices) > 0 {
-				content := chunk.Choices[0].Delta.Content
-				if content != "" {
-					out <- allm.StreamChunk{Content: content}
-				}
-			}
-		}
-
-		if err := stream.Err(); err != nil {
-			out <- allm.StreamChunk{Error: err}
-			return
-		}
-
-		out <- allm.StreamChunk{Done: true}
+		openaiStreamLoop(stream, out)
 	}()
 
 	return out

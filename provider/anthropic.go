@@ -142,7 +142,9 @@ func (p *AnthropicProvider) buildParams(req *allm.Request) (anthropic.MessageNew
 		// Handle assistant messages with tool calls
 		for _, tc := range m.ToolCalls {
 			var input map[string]any
-			json.Unmarshal(tc.Arguments, &input)
+			if err := json.Unmarshal(tc.Arguments, &input); err != nil {
+				return anthropic.MessageNewParams{}, fmt.Errorf("allm: invalid tool call arguments for %q: %w", tc.Name, err)
+			}
 			parts = append(parts, anthropic.ContentBlockParamUnion{
 				OfToolUse: &anthropic.ToolUseBlockParam{
 					ID:    tc.ID,
@@ -212,24 +214,6 @@ func (p *AnthropicProvider) buildParams(req *allm.Request) (anthropic.MessageNew
 	}
 
 	return params, nil
-}
-
-// toStringSlice converts an interface to []string for JSON schema required fields.
-func toStringSlice(v any) []string {
-	if v == nil {
-		return nil
-	}
-	arr, ok := v.([]any)
-	if !ok {
-		return nil
-	}
-	result := make([]string, 0, len(arr))
-	for _, item := range arr {
-		if s, ok := item.(string); ok {
-			result = append(result, s)
-		}
-	}
-	return result
 }
 
 // Complete sends a completion request.

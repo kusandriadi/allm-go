@@ -29,24 +29,27 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"math"
+	"math/rand/v2"
 	"sync"
 	"time"
 )
 
 // Version of the allm-go library
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 // Common errors
 var (
-	ErrNoProvider   = errors.New("allm: no provider configured")
-	ErrEmptyInput   = errors.New("allm: empty input")
-	ErrInputTooLong = errors.New("allm: input exceeds max length")
-	ErrRateLimited  = errors.New("allm: rate limited")
-	ErrTimeout      = errors.New("allm: request timeout")
-	ErrCanceled     = errors.New("allm: request canceled")
-	ErrProvider       = errors.New("allm: provider error")
-	ErrEmptyResponse  = errors.New("allm: empty response from provider")
+	ErrNoProvider    = errors.New("allm: no provider configured")
+	ErrEmptyInput    = errors.New("allm: empty input")
+	ErrInputTooLong  = errors.New("allm: input exceeds max length")
+	ErrRateLimited   = errors.New("allm: rate limited")
+	ErrTimeout       = errors.New("allm: request timeout")
+	ErrCanceled      = errors.New("allm: request canceled")
+	ErrProvider      = errors.New("allm: provider error")
+	ErrEmptyResponse = errors.New("allm: empty response from provider")
 )
 
 // Role constants for messages
@@ -94,6 +97,37 @@ type ToolResult struct {
 
 // RoleTool is the role for messages carrying tool results.
 const RoleTool = "tool"
+
+// Logger is the interface for structured logging.
+// *slog.Logger satisfies this interface out of the box.
+type Logger interface {
+	Info(msg string, args ...any)
+	Warn(msg string, args ...any)
+	Error(msg string, args ...any)
+}
+
+// Hook event type constants.
+const (
+	HookRequest = "request"
+	HookSuccess = "success"
+	HookError   = "error"
+	HookRetry   = "retry"
+)
+
+// HookEvent contains information about a client event.
+type HookEvent struct {
+	Type         string        // HookRequest, HookSuccess, HookError, HookRetry
+	Provider     string        // Provider name
+	Model        string        // Model used
+	Latency      time.Duration // Request latency
+	InputTokens  int           // Input token count
+	OutputTokens int           // Output token count
+	Error        error         // Error, if any
+	Attempt      int           // Current attempt (1-based)
+}
+
+// Hook is a callback for observing client events.
+type Hook func(event HookEvent)
 
 // Request contains parameters for an LLM request.
 type Request struct {
@@ -259,6 +293,45 @@ func WithTools(tools ...Tool) Option {
 	}
 }
 
+// WithMaxRetries sets the maximum number of retry attempts for transient errors.
+// Default is 0 (no retries). Retries use exponential backoff.
+func WithMaxRetries(n int) Option {
+	return func(c *Client) {
+		c.maxRetries = n
+	}
+}
+
+// WithRetryBaseDelay sets the initial backoff delay between retries.
+// Default is 1 second.
+func WithRetryBaseDelay(d time.Duration) Option {
+	return func(c *Client) {
+		c.retryBaseDelay = d
+	}
+}
+
+// WithRetryMaxDelay sets the maximum backoff delay between retries.
+// Default is 30 seconds.
+func WithRetryMaxDelay(d time.Duration) Option {
+	return func(c *Client) {
+		c.retryMaxDelay = d
+	}
+}
+
+// WithLogger sets a structured logger for the client.
+// Pass slog.Default() for standard logging, or nil to disable (default).
+func WithLogger(logger Logger) Option {
+	return func(c *Client) {
+		c.logger = logger
+	}
+}
+
+// WithHook sets a callback for observing client events (requests, retries, errors).
+func WithHook(hook Hook) Option {
+	return func(c *Client) {
+		c.hook = hook
+	}
+}
+
 // Client is the main interface for interacting with LLMs.
 // It is safe for concurrent use.
 type Client struct {
@@ -267,13 +340,18 @@ type Client struct {
 	timeout          time.Duration
 	maxInputLen      int
 	systemPrompt     string
-	model            string  // default chat model
-	maxTokens        int     // default max tokens
-	temperature      float64 // default temperature
-	presencePenalty  float64 // default presence penalty
-	frequencyPenalty float64 // default frequency penalty
-	embeddingModel   string  // default embedding model
-	tools            []Tool  // available tools for function calling
+	model            string        // default chat model
+	maxTokens        int           // default max tokens
+	temperature      float64       // default temperature
+	presencePenalty  float64       // default presence penalty
+	frequencyPenalty float64       // default frequency penalty
+	embeddingModel   string        // default embedding model
+	tools            []Tool        // available tools for function calling
+	maxRetries       int           // 0 = no retry (default)
+	retryBaseDelay   time.Duration // initial backoff delay (default 1s)
+	retryMaxDelay    time.Duration // max backoff delay (default 30s)
+	logger           Logger        // structured logger (nil = no logging)
+	hook             Hook          // event callback (nil = no hook)
 }
 
 // clientState holds a snapshot of client fields for use without holding the lock.
@@ -289,6 +367,11 @@ type clientState struct {
 	frequencyPenalty float64
 	embeddingModel   string
 	tools            []Tool
+	maxRetries       int
+	retryBaseDelay   time.Duration
+	retryMaxDelay    time.Duration
+	logger           Logger
+	hook             Hook
 }
 
 // snapshot captures the current client state under a read lock.
@@ -307,15 +390,22 @@ func (c *Client) snapshot() clientState {
 		frequencyPenalty: c.frequencyPenalty,
 		embeddingModel:   c.embeddingModel,
 		tools:            c.tools,
+		maxRetries:       c.maxRetries,
+		retryBaseDelay:   c.retryBaseDelay,
+		retryMaxDelay:    c.retryMaxDelay,
+		logger:           c.logger,
+		hook:             c.hook,
 	}
 }
 
 // New creates a new Client with the given provider and options.
 func New(provider Provider, opts ...Option) *Client {
 	c := &Client{
-		provider:    provider,
-		timeout:     60 * time.Second,
-		maxInputLen: 100000, // 100KB default
+		provider:       provider,
+		timeout:        60 * time.Second,
+		maxInputLen:    100000, // 100KB default
+		retryBaseDelay: 1 * time.Second,
+		retryMaxDelay:  30 * time.Second,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -365,6 +455,40 @@ func buildRequest(messages []Message, s clientState) *Request {
 	}
 }
 
+// isRetryable returns true if the error is transient and worth retrying.
+func isRetryable(err error) bool {
+	if errors.Is(err, ErrRateLimited) || errors.Is(err, ErrTimeout) || errors.Is(err, ErrEmptyResponse) {
+		return true
+	}
+	return false
+}
+
+// retryDelay calculates the backoff delay for a given attempt using exponential backoff with jitter.
+// attempt is 0-based (0 = first retry).
+func retryDelay(attempt int, base, max time.Duration) time.Duration {
+	delay := time.Duration(float64(base) * math.Pow(2, float64(attempt)))
+	if delay > max {
+		delay = max
+	}
+	// Add 0-25% jitter
+	jitter := time.Duration(float64(delay) * 0.25 * rand.Float64())
+	return delay + jitter
+}
+
+// classifyError converts context errors to allm sentinel errors.
+func classifyError(err error, ctx context.Context) error {
+	if errors.Is(err, ErrRateLimited) || errors.Is(err, ErrEmptyResponse) || errors.Is(err, ErrTimeout) {
+		return err
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return ErrTimeout
+	}
+	if ctx.Err() == context.Canceled {
+		return ErrCanceled
+	}
+	return err
+}
+
 // Complete sends a simple text completion request.
 func (c *Client) Complete(ctx context.Context, prompt string) (*Response, error) {
 	return c.Chat(ctx, []Message{{Role: RoleUser, Content: prompt}})
@@ -384,23 +508,110 @@ func (c *Client) Chat(ctx context.Context, messages []Message) (*Response, error
 
 	req := buildRequest(messages, s)
 
-	ctx, cancel := context.WithTimeout(ctx, s.timeout)
-	defer cancel()
-
-	resp, err := s.provider.Complete(ctx, req)
-	if err != nil {
-		if errors.Is(err, ErrRateLimited) {
-			return nil, err
-		}
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, ErrTimeout
-		}
-		if ctx.Err() == context.Canceled {
-			return nil, ErrCanceled
-		}
-		return nil, err
+	if s.hook != nil {
+		s.hook(HookEvent{
+			Type:     HookRequest,
+			Provider: s.provider.Name(),
+			Model:    s.model,
+			Attempt:  1,
+		})
 	}
-	return resp, nil
+
+	maxAttempts := 1 + s.maxRetries
+	var lastErr error
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		// Backoff before retry
+		if attempt > 0 {
+			delay := retryDelay(attempt-1, s.retryBaseDelay, s.retryMaxDelay)
+			if s.logger != nil {
+				s.logger.Warn("retrying request",
+					"provider", s.provider.Name(),
+					"model", s.model,
+					"attempt", attempt+1,
+					"delay", delay,
+					"error", lastErr,
+				)
+			}
+			if s.hook != nil {
+				s.hook(HookEvent{
+					Type:     HookRetry,
+					Provider: s.provider.Name(),
+					Model:    s.model,
+					Attempt:  attempt + 1,
+					Error:    lastErr,
+				})
+			}
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ErrCanceled
+			}
+		}
+
+		// Per-attempt timeout
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, s.timeout)
+		start := time.Now()
+		resp, err := s.provider.Complete(attemptCtx, req)
+		latency := time.Since(start)
+		// Classify error before canceling — attemptCancel would set ctx.Err() to Canceled.
+		if err != nil {
+			err = classifyError(err, attemptCtx)
+		}
+		attemptCancel()
+
+		if err == nil {
+			if s.logger != nil {
+				s.logger.Info("request succeeded",
+					"provider", s.provider.Name(),
+					"model", s.model,
+					"input_tokens", resp.InputTokens,
+					"output_tokens", resp.OutputTokens,
+					"latency", latency,
+					"attempt", attempt+1,
+				)
+			}
+			if s.hook != nil {
+				s.hook(HookEvent{
+					Type:         HookSuccess,
+					Provider:     s.provider.Name(),
+					Model:        s.model,
+					Latency:      latency,
+					InputTokens:  resp.InputTokens,
+					OutputTokens: resp.OutputTokens,
+					Attempt:      attempt + 1,
+				})
+			}
+			return resp, nil
+		}
+
+		lastErr = err
+
+		// Don't retry non-transient errors or on the last attempt
+		if !isRetryable(lastErr) || attempt == maxAttempts-1 {
+			if s.logger != nil {
+				s.logger.Error("request failed",
+					"provider", s.provider.Name(),
+					"model", s.model,
+					"error", lastErr,
+					"attempt", attempt+1,
+				)
+			}
+			if s.hook != nil {
+				s.hook(HookEvent{
+					Type:     HookError,
+					Provider: s.provider.Name(),
+					Model:    s.model,
+					Latency:  latency,
+					Error:    lastErr,
+					Attempt:  attempt + 1,
+				})
+			}
+			return nil, lastErr
+		}
+	}
+
+	return nil, lastErr
 }
 
 // Stream sends a request and streams the response.
@@ -467,30 +678,68 @@ func (c *Client) Embed(ctx context.Context, input ...string) (*EmbedResponse, er
 
 	embedder, ok := s.provider.(Embedder)
 	if !ok {
-		return nil, errors.New("allm: provider does not support embeddings")
+		return nil, fmt.Errorf("allm: provider does not support embeddings")
 	}
 
 	if len(input) == 0 {
 		return nil, ErrEmptyInput
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, s.timeout)
-	defer cancel()
-
-	resp, err := embedder.Embed(ctx, &EmbedRequest{
+	embedReq := &EmbedRequest{
 		Input: input,
 		Model: s.embeddingModel,
-	})
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, ErrTimeout
-		}
-		if ctx.Err() == context.Canceled {
-			return nil, ErrCanceled
-		}
-		return nil, err
 	}
-	return resp, nil
+
+	maxAttempts := 1 + s.maxRetries
+	var lastErr error
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			delay := retryDelay(attempt-1, s.retryBaseDelay, s.retryMaxDelay)
+			if s.logger != nil {
+				s.logger.Warn("retrying embed request",
+					"provider", s.provider.Name(),
+					"model", s.embeddingModel,
+					"attempt", attempt+1,
+					"delay", delay,
+					"error", lastErr,
+				)
+			}
+			if s.hook != nil {
+				s.hook(HookEvent{
+					Type:     HookRetry,
+					Provider: s.provider.Name(),
+					Model:    s.embeddingModel,
+					Attempt:  attempt + 1,
+					Error:    lastErr,
+				})
+			}
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ErrCanceled
+			}
+		}
+
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, s.timeout)
+		resp, err := embedder.Embed(attemptCtx, embedReq)
+		if err != nil {
+			err = classifyError(err, attemptCtx)
+		}
+		attemptCancel()
+
+		if err == nil {
+			return resp, nil
+		}
+
+		lastErr = err
+
+		if !isRetryable(lastErr) || attempt == maxAttempts-1 {
+			return nil, lastErr
+		}
+	}
+
+	return nil, lastErr
 }
 
 // Models returns available models if the provider supports model listing.

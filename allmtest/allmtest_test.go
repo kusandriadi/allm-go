@@ -217,3 +217,69 @@ func TestMockProviderConcurrency(t *testing.T) {
 		t.Errorf("expected 10 calls, got %d", m.CallCount())
 	}
 }
+
+func TestMockProviderEmbed(t *testing.T) {
+	m := NewMockProvider("test")
+
+	resp, err := m.Embed(context.Background(), &allm.EmbedRequest{
+		Input: []string{"hello", "world"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Embeddings) != 2 {
+		t.Fatalf("expected 2 embeddings, got %d", len(resp.Embeddings))
+	}
+	// Default embed response returns zero vectors of length 3
+	if len(resp.Embeddings[0]) != 3 {
+		t.Errorf("expected vector length 3, got %d", len(resp.Embeddings[0]))
+	}
+	if resp.Provider != "test" {
+		t.Errorf("expected provider 'test', got %q", resp.Provider)
+	}
+	if resp.Model != "mock-embed" {
+		t.Errorf("expected model 'mock-embed', got %q", resp.Model)
+	}
+}
+
+func TestMockProviderEmbedCustom(t *testing.T) {
+	m := NewMockProvider("test", WithEmbedResponse(&allm.EmbedResponse{
+		Embeddings: [][]float64{{0.1, 0.2, 0.3}},
+		Model:      "custom-embed",
+		Provider:   "test",
+	}))
+
+	resp, err := m.Embed(context.Background(), &allm.EmbedRequest{
+		Input: []string{"hello"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Embeddings) != 1 {
+		t.Fatalf("expected 1 embedding, got %d", len(resp.Embeddings))
+	}
+	if resp.Embeddings[0][0] != 0.1 {
+		t.Errorf("expected 0.1, got %f", resp.Embeddings[0][0])
+	}
+	if resp.Model != "custom-embed" {
+		t.Errorf("expected custom-embed, got %q", resp.Model)
+	}
+}
+
+func TestMockProviderStreamError(t *testing.T) {
+	testErr := errors.New("stream failure")
+	m := NewMockProvider("test", WithError(testErr))
+
+	var gotError error
+	for chunk := range m.Stream(context.Background(), &allm.Request{
+		Messages: []allm.Message{{Role: "user", Content: "Hi"}},
+	}) {
+		if chunk.Error != nil {
+			gotError = chunk.Error
+			break
+		}
+	}
+	if gotError != testErr {
+		t.Errorf("expected stream error, got %v", gotError)
+	}
+}

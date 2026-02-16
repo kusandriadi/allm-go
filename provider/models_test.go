@@ -6,16 +6,16 @@ import (
 
 func TestAnthropicModelConstants(t *testing.T) {
 	models := map[string]string{
-		"AnthropicClaudeOpus4_6":    AnthropicClaudeOpus4_6,
-		"AnthropicClaudeOpus4_5":    AnthropicClaudeOpus4_5,
-		"AnthropicClaudeOpus4_1":    AnthropicClaudeOpus4_1,
-		"AnthropicClaudeOpus4":      AnthropicClaudeOpus4,
-		"AnthropicClaudeSonnet4_5":  AnthropicClaudeSonnet4_5,
-		"AnthropicClaudeSonnet4":    AnthropicClaudeSonnet4,
-		"AnthropicClaudeSonnet3_7":  AnthropicClaudeSonnet3_7,
-		"AnthropicClaudeHaiku4_5":   AnthropicClaudeHaiku4_5,
-		"AnthropicClaudeHaiku3_5":   AnthropicClaudeHaiku3_5,
-		"AnthropicClaudeHaiku3":     AnthropicClaudeHaiku3,
+		"AnthropicClaudeOpus4_6":   AnthropicClaudeOpus4_6,
+		"AnthropicClaudeOpus4_5":   AnthropicClaudeOpus4_5,
+		"AnthropicClaudeOpus4_1":   AnthropicClaudeOpus4_1,
+		"AnthropicClaudeOpus4":     AnthropicClaudeOpus4,
+		"AnthropicClaudeSonnet4_5": AnthropicClaudeSonnet4_5,
+		"AnthropicClaudeSonnet4":   AnthropicClaudeSonnet4,
+		"AnthropicClaudeSonnet3_7": AnthropicClaudeSonnet3_7,
+		"AnthropicClaudeHaiku4_5":  AnthropicClaudeHaiku4_5,
+		"AnthropicClaudeHaiku3_5":  AnthropicClaudeHaiku3_5,
+		"AnthropicClaudeHaiku3":    AnthropicClaudeHaiku3,
 	}
 
 	for name, val := range models {
