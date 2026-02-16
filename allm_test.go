@@ -548,7 +548,7 @@ func TestClientModelFlowsToRequest(t *testing.T) {
 	p := &mockProvider{name: "test", available: true, response: &Response{Content: "OK"}}
 	c := New(p, WithModel("my-model"), WithMaxTokens(2048), WithTemperature(0.5))
 
-	c.Complete(context.Background(), "Hi")
+	_, _ = c.Complete(context.Background(), "Hi")
 
 	if p.lastReq == nil {
 		t.Fatal("expected request to be captured")
@@ -568,7 +568,7 @@ func TestClientModelDefaultsToZero(t *testing.T) {
 	p := &mockProvider{name: "test", available: true, response: &Response{Content: "OK"}}
 	c := New(p) // no model/maxTokens/temperature set
 
-	c.Complete(context.Background(), "Hi")
+	_, _ = c.Complete(context.Background(), "Hi")
 
 	if p.lastReq.Model != "" {
 		t.Errorf("expected empty model, got %q", p.lastReq.Model)
@@ -585,13 +585,13 @@ func TestSetModel(t *testing.T) {
 	p := &mockProvider{name: "test", available: true, response: &Response{Content: "OK"}}
 	c := New(p, WithModel("model-a"))
 
-	c.Complete(context.Background(), "Hi")
+	_, _ = c.Complete(context.Background(), "Hi")
 	if p.lastReq.Model != "model-a" {
 		t.Errorf("expected model-a, got %q", p.lastReq.Model)
 	}
 
 	c.SetModel("model-b")
-	c.Complete(context.Background(), "Hi")
+	_, _ = c.Complete(context.Background(), "Hi")
 	if p.lastReq.Model != "model-b" {
 		t.Errorf("expected model-b, got %q", p.lastReq.Model)
 	}
@@ -722,7 +722,7 @@ func TestConcurrentSetProviderAndChat(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			c.Chat(context.Background(), []Message{
+			_, _ = c.Chat(context.Background(), []Message{
 				{Role: RoleUser, Content: "Hello"},
 			})
 		}()
@@ -1325,7 +1325,6 @@ func (l *mockLogger) Error(msg string, args ...any) {
 }
 
 func (l *mockLogger) infoCount() int  { l.mu.Lock(); defer l.mu.Unlock(); return len(l.infos) }
-func (l *mockLogger) warnCount() int  { l.mu.Lock(); defer l.mu.Unlock(); return len(l.warns) }
 func (l *mockLogger) errorCount() int { l.mu.Lock(); defer l.mu.Unlock(); return len(l.errors_) }
 
 // --- Retry tests ---

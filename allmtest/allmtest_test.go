@@ -119,7 +119,7 @@ func TestMockProviderModels(t *testing.T) {
 func TestMockProviderReset(t *testing.T) {
 	m := NewMockProvider("test")
 
-	m.Complete(context.Background(), &allm.Request{
+	_, _ = m.Complete(context.Background(), &allm.Request{
 		Messages: []allm.Message{{Role: "user", Content: "Hi"}},
 	})
 	if m.CallCount() != 1 {
@@ -166,8 +166,8 @@ func TestMockProviderRequests(t *testing.T) {
 	req1 := &allm.Request{Messages: []allm.Message{{Role: "user", Content: "Hi"}}}
 	req2 := &allm.Request{Messages: []allm.Message{{Role: "user", Content: "Bye"}}}
 
-	m.Complete(context.Background(), req1)
-	m.Complete(context.Background(), req2)
+	_, _ = m.Complete(context.Background(), req1)
+	_, _ = m.Complete(context.Background(), req2)
 
 	reqs := m.Requests()
 	if len(reqs) != 2 {
