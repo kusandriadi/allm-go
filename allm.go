@@ -38,7 +38,7 @@ import (
 )
 
 // Version of the allm-go library
-const Version = "0.4.0"
+const Version = "0.5.0"
 
 // Common errors
 var (
@@ -295,24 +295,39 @@ func WithTools(tools ...Tool) Option {
 
 // WithMaxRetries sets the maximum number of retry attempts for transient errors.
 // Default is 0 (no retries). Retries use exponential backoff.
+// Maximum allowed value is 10. Panics if n is invalid.
 func WithMaxRetries(n int) Option {
 	return func(c *Client) {
+		if n < 0 || n > 10 {
+			panic(fmt.Sprintf("invalid max_retries: %d (must be 0-10)", n))
+		}
 		c.maxRetries = n
 	}
 }
 
 // WithRetryBaseDelay sets the initial backoff delay between retries.
-// Default is 1 second.
+// Default is 1 second. Minimum allowed is 100ms. Panics if invalid.
 func WithRetryBaseDelay(d time.Duration) Option {
 	return func(c *Client) {
+		if d < MinRetryDelay {
+			panic(fmt.Sprintf("invalid retry_base_delay: %v (minimum %v)", d, MinRetryDelay))
+		}
 		c.retryBaseDelay = d
 	}
 }
 
 // WithRetryMaxDelay sets the maximum backoff delay between retries.
-// Default is 30 seconds.
+// Default is 30 seconds. Must be >= MinRetryDelay and <= 5 minutes. Panics if invalid.
+// Note: maxDelay >= baseDelay is NOT validated here because option order is arbitrary.
+// If maxDelay < baseDelay at runtime, retryDelay clamps to maxDelay.
 func WithRetryMaxDelay(d time.Duration) Option {
 	return func(c *Client) {
+		if d < MinRetryDelay {
+			panic(fmt.Sprintf("invalid retry_max_delay: %v (minimum %v)", d, MinRetryDelay))
+		}
+		if d > MaxRetryMaxDelay {
+			panic(fmt.Sprintf("invalid retry_max_delay: %v (maximum %v)", d, MaxRetryMaxDelay))
+		}
 		c.retryMaxDelay = d
 	}
 }
@@ -470,8 +485,8 @@ func retryDelay(attempt int, base, max time.Duration) time.Duration {
 	if delay > max {
 		delay = max
 	}
-	// Add 0-25% jitter
-	jitter := time.Duration(float64(delay) * 0.25 * rand.Float64())
+	// Add 0-25% jitter (non-cryptographic, safe for backoff timing)
+	jitter := time.Duration(float64(delay) * 0.25 * rand.Float64()) // #nosec G404 -- jitter does not need crypto rand
 	return delay + jitter
 }
 
@@ -508,110 +523,14 @@ func (c *Client) Chat(ctx context.Context, messages []Message) (*Response, error
 
 	req := buildRequest(messages, s)
 
-	if s.hook != nil {
-		s.hook(HookEvent{
-			Type:     HookRequest,
-			Provider: s.provider.Name(),
-			Model:    s.model,
-			Attempt:  1,
-		})
+	// Validate request parameters for security
+	if err := validateRequest(req); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
 	}
 
-	maxAttempts := 1 + s.maxRetries
-	var lastErr error
-
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		// Backoff before retry
-		if attempt > 0 {
-			delay := retryDelay(attempt-1, s.retryBaseDelay, s.retryMaxDelay)
-			if s.logger != nil {
-				s.logger.Warn("retrying request",
-					"provider", s.provider.Name(),
-					"model", s.model,
-					"attempt", attempt+1,
-					"delay", delay,
-					"error", lastErr,
-				)
-			}
-			if s.hook != nil {
-				s.hook(HookEvent{
-					Type:     HookRetry,
-					Provider: s.provider.Name(),
-					Model:    s.model,
-					Attempt:  attempt + 1,
-					Error:    lastErr,
-				})
-			}
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return nil, ErrCanceled
-			}
-		}
-
-		// Per-attempt timeout
-		attemptCtx, attemptCancel := context.WithTimeout(ctx, s.timeout)
-		start := time.Now()
-		resp, err := s.provider.Complete(attemptCtx, req)
-		latency := time.Since(start)
-		// Classify error before canceling — attemptCancel would set ctx.Err() to Canceled.
-		if err != nil {
-			err = classifyError(err, attemptCtx)
-		}
-		attemptCancel()
-
-		if err == nil {
-			if s.logger != nil {
-				s.logger.Info("request succeeded",
-					"provider", s.provider.Name(),
-					"model", s.model,
-					"input_tokens", resp.InputTokens,
-					"output_tokens", resp.OutputTokens,
-					"latency", latency,
-					"attempt", attempt+1,
-				)
-			}
-			if s.hook != nil {
-				s.hook(HookEvent{
-					Type:         HookSuccess,
-					Provider:     s.provider.Name(),
-					Model:        s.model,
-					Latency:      latency,
-					InputTokens:  resp.InputTokens,
-					OutputTokens: resp.OutputTokens,
-					Attempt:      attempt + 1,
-				})
-			}
-			return resp, nil
-		}
-
-		lastErr = err
-
-		// Don't retry non-transient errors or on the last attempt
-		if !isRetryable(lastErr) || attempt == maxAttempts-1 {
-			if s.logger != nil {
-				s.logger.Error("request failed",
-					"provider", s.provider.Name(),
-					"model", s.model,
-					"error", lastErr,
-					"attempt", attempt+1,
-				)
-			}
-			if s.hook != nil {
-				s.hook(HookEvent{
-					Type:     HookError,
-					Provider: s.provider.Name(),
-					Model:    s.model,
-					Latency:  latency,
-					Error:    lastErr,
-					Attempt:  attempt + 1,
-				})
-			}
-			return nil, lastErr
-		}
-	}
-
-	return nil, lastErr
+	return retryWithBackoff(ctx, s, func(attemptCtx context.Context) (*Response, error) {
+		return s.provider.Complete(attemptCtx, req)
+	}, "chat")
 }
 
 // Stream sends a request and streams the response.
@@ -636,14 +555,32 @@ func (c *Client) Stream(ctx context.Context, messages []Message) <-chan StreamCh
 
 		req := buildRequest(messages, s)
 
-		ctx, cancel := context.WithTimeout(ctx, s.timeout)
+		// Validate request parameters
+		if err := validateRequest(req); err != nil {
+			out <- StreamChunk{Error: fmt.Errorf("invalid request: %w", err)}
+			return
+		}
+
+		streamCtx, cancel := context.WithTimeout(ctx, s.timeout)
 		defer cancel()
 
-		chunks := s.provider.Stream(ctx, req)
-		for chunk := range chunks {
-			out <- chunk
-			if chunk.Done || chunk.Error != nil {
+		chunks := s.provider.Stream(streamCtx, req)
+
+		// Use select to handle context cancellation properly and prevent goroutine leaks
+		for {
+			select {
+			case <-streamCtx.Done():
+				out <- StreamChunk{Error: classifyError(streamCtx.Err(), streamCtx)}
 				return
+			case chunk, ok := <-chunks:
+				if !ok {
+					// Provider closed the channel without sending Done - this is valid
+					return
+				}
+				out <- chunk
+				if chunk.Done || chunk.Error != nil {
+					return
+				}
 			}
 		}
 	}()
@@ -685,61 +622,22 @@ func (c *Client) Embed(ctx context.Context, input ...string) (*EmbedResponse, er
 		return nil, ErrEmptyInput
 	}
 
+	// Validate input strings (check for excessive length)
+	for i, text := range input {
+		if len(text) > s.maxInputLen {
+			return nil, fmt.Errorf("input %d exceeds max length", i)
+		}
+	}
+
 	embedReq := &EmbedRequest{
 		Input: input,
 		Model: s.embeddingModel,
 	}
 
-	maxAttempts := 1 + s.maxRetries
-	var lastErr error
-
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if attempt > 0 {
-			delay := retryDelay(attempt-1, s.retryBaseDelay, s.retryMaxDelay)
-			if s.logger != nil {
-				s.logger.Warn("retrying embed request",
-					"provider", s.provider.Name(),
-					"model", s.embeddingModel,
-					"attempt", attempt+1,
-					"delay", delay,
-					"error", lastErr,
-				)
-			}
-			if s.hook != nil {
-				s.hook(HookEvent{
-					Type:     HookRetry,
-					Provider: s.provider.Name(),
-					Model:    s.embeddingModel,
-					Attempt:  attempt + 1,
-					Error:    lastErr,
-				})
-			}
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return nil, ErrCanceled
-			}
-		}
-
-		attemptCtx, attemptCancel := context.WithTimeout(ctx, s.timeout)
-		resp, err := embedder.Embed(attemptCtx, embedReq)
-		if err != nil {
-			err = classifyError(err, attemptCtx)
-		}
-		attemptCancel()
-
-		if err == nil {
-			return resp, nil
-		}
-
-		lastErr = err
-
-		if !isRetryable(lastErr) || attempt == maxAttempts-1 {
-			return nil, lastErr
-		}
-	}
-
-	return nil, lastErr
+	// Use generic retry helper
+	return retryWithBackoff(ctx, s, func(attemptCtx context.Context) (*EmbedResponse, error) {
+		return embedder.Embed(attemptCtx, embedReq)
+	}, "embed")
 }
 
 // Models returns available models if the provider supports model listing.

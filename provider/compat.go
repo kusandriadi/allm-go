@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/kusandriadi/allm-go"
@@ -17,6 +18,9 @@ type providerRegistry struct {
 	defaultModel string
 	envKey       string
 	embedSupport bool
+	// visionSupport indicates the provider has models that support image input.
+	// Image data is passed via the shared convertToOpenAI function automatically.
+	visionSupport bool
 }
 
 // knownProviders is the registry of OpenAI-compatible providers.
@@ -28,22 +32,25 @@ var knownProviders = map[allm.ProviderName]providerRegistry{
 		embedSupport: false,
 	},
 	allm.Gemini: {
-		baseURL:      "https://generativelanguage.googleapis.com/v1beta/openai/",
-		defaultModel: "gemini-2.0-flash",
-		envKey:       "GEMINI_API_KEY",
-		embedSupport: false,
+		baseURL:       "https://generativelanguage.googleapis.com/v1beta/openai/",
+		defaultModel:  "gemini-2.0-flash",
+		envKey:        "GEMINI_API_KEY",
+		embedSupport:  false,
+		visionSupport: true,
 	},
 	allm.Groq: {
-		baseURL:      "https://api.groq.com/openai/v1",
-		defaultModel: "llama-3.3-70b-versatile",
-		envKey:       "GROQ_API_KEY",
-		embedSupport: false,
+		baseURL:       "https://api.groq.com/openai/v1",
+		defaultModel:  "llama-3.3-70b-versatile",
+		envKey:        "GROQ_API_KEY",
+		embedSupport:  false,
+		visionSupport: true,
 	},
 	allm.GLM: {
-		baseURL:      "https://open.bigmodel.cn/api/paas/v4/",
-		defaultModel: "glm-4-flash",
-		envKey:       "GLM_API_KEY",
-		embedSupport: true,
+		baseURL:       "https://open.bigmodel.cn/api/paas/v4/",
+		defaultModel:  "glm-4-flash",
+		envKey:        "GLM_API_KEY",
+		embedSupport:  true,
+		visionSupport: true,
 	},
 	allm.Perplexity: {
 		baseURL:      "https://api.perplexity.ai",
@@ -181,12 +188,8 @@ func (p *OpenAICompatibleProvider) Complete(ctx context.Context, req *allm.Reque
 	start := time.Now()
 
 	messages := convertToOpenAI(req.Messages)
-	params := openaiChatParams(messages, req.Model, p.model, req.MaxTokens, p.maxTokens, req.Temperature, p.temperature, req)
-
-	model := p.model
-	if req.Model != "" {
-		model = req.Model
-	}
+	params := openaiChatParams(messages, p.model, p.maxTokens, p.temperature, req)
+	model := resolveModel(req.Model, p.model)
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
@@ -204,7 +207,7 @@ func (p *OpenAICompatibleProvider) Stream(ctx context.Context, req *allm.Request
 		defer close(out)
 
 		messages := convertToOpenAI(req.Messages)
-		params := openaiChatParams(messages, req.Model, p.model, req.MaxTokens, p.maxTokens, req.Temperature, p.temperature, req)
+		params := openaiChatParams(messages, p.model, p.maxTokens, p.temperature, req)
 
 		stream := p.client.Chat.Completions.NewStreaming(ctx, params)
 		openaiStreamLoop(stream, out)
@@ -219,11 +222,16 @@ func (p *OpenAICompatibleProvider) Models(ctx context.Context) ([]allm.Model, er
 }
 
 // Embed generates embeddings using the OpenAI-compatible API.
-// Only supported by providers with embedSupport=true in registry (GLM, Local).
+// Supported by providers with embedSupport=true in registry (GLM, Local),
+// and by custom (unregistered) providers if an embedding model is configured.
 func (p *OpenAICompatibleProvider) Embed(ctx context.Context, req *allm.EmbedRequest) (*allm.EmbedResponse, error) {
-	// Check if provider supports embeddings
+	// Known providers: check registry for embed support
 	if reg, ok := knownProviders[p.name]; ok && !reg.embedSupport {
 		return nil, fmt.Errorf("allm: provider %s does not support embeddings", p.name)
+	}
+	// Unknown providers: allow if an embedding model is configured
+	if _, ok := knownProviders[p.name]; !ok && p.embedModel == "" && req.Model == "" {
+		return nil, fmt.Errorf("allm: provider %s requires an embedding model (use WithEmbedModel)", p.name)
 	}
 
 	model := p.embedModel
@@ -239,6 +247,15 @@ func (p *OpenAICompatibleProvider) Embed(ctx context.Context, req *allm.EmbedReq
 
 // buildClient creates the OpenAI SDK client with appropriate options.
 func (p *OpenAICompatibleProvider) buildClient() openai.Client {
+	// Validate base URL for security (allow local URLs for Local provider)
+	// Only validate if baseURL looks like a URL (contains scheme or starts with http)
+	if p.baseURL != "" && (strings.Contains(p.baseURL, "://") || strings.HasPrefix(p.baseURL, "http")) {
+		allowLocal := (p.name == allm.Local)
+		if err := validateBaseURLProvider(p.baseURL, allowLocal); err != nil {
+			panic(fmt.Sprintf("%s: %v", p.name, err))
+		}
+	}
+
 	opts := []option.RequestOption{
 		option.WithBaseURL(p.baseURL),
 	}

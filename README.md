@@ -135,8 +135,10 @@ Sentinel errors with `errors.Is`: `ErrRateLimited`, `ErrTimeout`, `ErrInputTooLo
 |--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | Chat | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Streaming | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Vision | ✓ | ✓ | | | | | | |
+| Vision | ✓ | ✓ | | ✓ | ✓* | ✓* | | ✓* |
 | Embeddings | | ✓ | | | | ✓ | | ✓ |
 | Tool Use | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+*Vision requires a model that supports it (e.g., `llama-3.2-90b-vision` for Groq, `glm-4v` for GLM).
 
 Thread-safe. MIT License.

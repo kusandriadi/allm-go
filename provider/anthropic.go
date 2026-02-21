@@ -17,6 +17,7 @@ import (
 )
 
 // wrapAnthropicError wraps Anthropic API errors with allm sentinel errors.
+// Returns ErrRateLimited for 429 status codes, otherwise returns the original error.
 func wrapAnthropicError(err error) error {
 	if err == nil {
 		return nil
@@ -84,6 +85,13 @@ func Anthropic(apiKey string, opts ...AnthropicOption) *AnthropicProvider {
 
 	for _, opt := range opts {
 		opt(p)
+	}
+
+	// Validate custom base URL for security (SSRF prevention)
+	if p.baseURL != "" {
+		if err := validateBaseURLProvider(p.baseURL, false); err != nil {
+			panic(fmt.Sprintf("anthropic: %v", err))
+		}
 	}
 
 	// Create client once for connection reuse

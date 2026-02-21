@@ -81,9 +81,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	f.Close()
+	_ = f.Close()
 
-	content, _ := os.ReadFile(f.Name())
+	content, _ := os.ReadFile(f.Name()) // #nosec G703 -- example code, path is from os.CreateTemp
 	fmt.Printf("Written to %s:\n%s\n\n", f.Name(), string(content))
 
 	// Switch to different provider entirely

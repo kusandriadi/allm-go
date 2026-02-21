@@ -83,7 +83,7 @@ func main() {
 
 	// --- Vision (multi-modal) ---
 	if len(os.Args) > 1 {
-		imageData, err := os.ReadFile(os.Args[1])
+		imageData, err := os.ReadFile(os.Args[1]) // #nosec G703 -- example code, user provides image path
 		if err != nil {
 			log.Fatal(err)
 		}

@@ -2,7 +2,7 @@ package provider
 
 import (
 	"context"
-	"encoding/base64"
+	"fmt"
 	"os"
 	"time"
 
@@ -84,68 +84,13 @@ func (p *OpenAIProvider) Available() bool {
 	return p.apiKey != ""
 }
 
-// buildChatParams builds ChatCompletionNewParams from an allm.Request.
-// OpenAI has its own buildChatParams because it handles image messages.
-func (p *OpenAIProvider) buildChatParams(req *allm.Request) openai.ChatCompletionNewParams {
-	messages := p.convertMessages(req.Messages)
-
-	model := p.model
-	if req.Model != "" {
-		model = req.Model
-	}
-
-	maxTokens := int64(p.maxTokens)
-	if req.MaxTokens > 0 {
-		maxTokens = int64(req.MaxTokens)
-	}
-
-	params := openai.ChatCompletionNewParams{
-		Model:     openai.ChatModel(model),
-		Messages:  messages,
-		MaxTokens: openai.Int(maxTokens),
-	}
-
-	temp := p.temperature
-	if req.Temperature > 0 {
-		temp = req.Temperature
-	}
-	if temp > 0 {
-		params.Temperature = openai.Float(temp)
-	}
-
-	if req.TopP > 0 {
-		params.TopP = openai.Float(req.TopP)
-	}
-
-	if req.PresencePenalty != 0 {
-		params.PresencePenalty = openai.Float(req.PresencePenalty)
-	}
-
-	if req.FrequencyPenalty != 0 {
-		params.FrequencyPenalty = openai.Float(req.FrequencyPenalty)
-	}
-
-	if len(req.Stop) > 0 {
-		params.Stop = openai.ChatCompletionNewParamsStopUnion{OfStringArray: req.Stop}
-	}
-
-	if len(req.Tools) > 0 {
-		params.Tools = convertToolsToOpenAI(req.Tools)
-	}
-
-	return params
-}
-
 // Complete sends a completion request.
 func (p *OpenAIProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
 	start := time.Now()
 
-	params := p.buildChatParams(req)
-
-	model := p.model
-	if req.Model != "" {
-		model = req.Model
-	}
+	messages := convertToOpenAI(req.Messages)
+	params := openaiChatParams(messages, p.model, p.maxTokens, p.temperature, req)
+	model := resolveModel(req.Model, p.model)
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
@@ -172,7 +117,8 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *allm.Request) <-chan a
 	go func() {
 		defer close(out)
 
-		params := p.buildChatParams(req)
+		messages := convertToOpenAI(req.Messages)
+		params := openaiChatParams(messages, p.model, p.maxTokens, p.temperature, req)
 
 		stream := p.client.Chat.Completions.NewStreaming(ctx, params)
 		openaiStreamLoop(stream, out)
@@ -182,6 +128,13 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *allm.Request) <-chan a
 }
 
 func (p *OpenAIProvider) buildClient() openai.Client {
+	// Validate custom base URL for security (SSRF prevention)
+	if p.baseURL != "" {
+		if err := validateBaseURLProvider(p.baseURL, false); err != nil {
+			panic(fmt.Sprintf("openai: %v", err))
+		}
+	}
+
 	opts := []option.RequestOption{
 		option.WithAPIKey(p.apiKey),
 	}
@@ -189,72 +142,4 @@ func (p *OpenAIProvider) buildClient() openai.Client {
 		opts = append(opts, option.WithBaseURL(p.baseURL))
 	}
 	return openai.NewClient(opts...)
-}
-
-// convertMessages converts allm messages to OpenAI format with image support.
-// OpenAI's convertMessages is separate from the shared convertToOpenAI because
-// it handles vision (image) content parts.
-func (p *OpenAIProvider) convertMessages(msgs []allm.Message) []openai.ChatCompletionMessageParamUnion {
-	var messages []openai.ChatCompletionMessageParamUnion
-
-	for _, m := range msgs {
-		// Handle tool result messages
-		if m.Role == allm.RoleTool {
-			for _, tr := range m.ToolResults {
-				messages = append(messages, openai.ToolMessage(tr.Content, tr.ToolCallID))
-			}
-			continue
-		}
-
-		if len(m.Images) > 0 {
-			var parts []openai.ChatCompletionContentPartUnionParam
-
-			if m.Content != "" {
-				parts = append(parts, openai.TextContentPart(m.Content))
-			}
-
-			for _, img := range m.Images {
-				data := base64.StdEncoding.EncodeToString(img.Data)
-				url := "data:" + img.MimeType + ";base64," + data
-				parts = append(parts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
-					URL: url,
-				}))
-			}
-
-			switch m.Role {
-			case allm.RoleUser:
-				messages = append(messages, openai.UserMessage(parts))
-			}
-		} else if len(m.ToolCalls) > 0 && m.Role == allm.RoleAssistant {
-			// Assistant message with tool calls
-			msg := openai.ChatCompletionAssistantMessageParam{
-				Content: openai.ChatCompletionAssistantMessageParamContentUnion{
-					OfString: openai.String(m.Content),
-				},
-			}
-			for _, tc := range m.ToolCalls {
-				msg.ToolCalls = append(msg.ToolCalls, openai.ChatCompletionMessageToolCallUnionParam{
-					OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
-						ID: tc.ID,
-						Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
-							Name:      tc.Name,
-							Arguments: string(tc.Arguments),
-						},
-					},
-				})
-			}
-			messages = append(messages, openai.ChatCompletionMessageParamUnion{OfAssistant: &msg})
-		} else {
-			switch m.Role {
-			case allm.RoleSystem:
-				messages = append(messages, openai.SystemMessage(m.Content))
-			case allm.RoleUser:
-				messages = append(messages, openai.UserMessage(m.Content))
-			case allm.RoleAssistant:
-				messages = append(messages, openai.AssistantMessage(m.Content))
-			}
-		}
-	}
-
-	return messages
 }

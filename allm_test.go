@@ -1625,3 +1625,240 @@ func TestEmbedRetry(t *testing.T) {
 		t.Fatalf("expected 1 embedding, got %d", len(resp.Embeddings))
 	}
 }
+
+// --- Validation tests ---
+
+func TestValidateRequestTemperature(t *testing.T) {
+	tests := []struct {
+		name    string
+		temp    float64
+		wantErr bool
+	}{
+		{"zero (default)", 0, false},
+		{"valid", 0.7, false},
+		{"max", 2.0, false},
+		{"negative", -0.1, true},
+		{"too high", 2.1, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &Request{
+				Messages:    []Message{{Role: RoleUser, Content: "Hi"}},
+				Temperature: tc.temp,
+			}
+			err := validateRequest(req)
+			if tc.wantErr && err == nil {
+				t.Error("expected error")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateRequestTopP(t *testing.T) {
+	tests := []struct {
+		name    string
+		topP    float64
+		wantErr bool
+	}{
+		{"zero (default)", 0, false},
+		{"valid", 0.9, false},
+		{"max", 1.0, false},
+		{"negative", -0.1, true},
+		{"too high", 1.1, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &Request{
+				Messages: []Message{{Role: RoleUser, Content: "Hi"}},
+				TopP:     tc.topP,
+			}
+			err := validateRequest(req)
+			if tc.wantErr && err == nil {
+				t.Error("expected error")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateRequestMaxTokens(t *testing.T) {
+	req := &Request{
+		Messages:  []Message{{Role: RoleUser, Content: "Hi"}},
+		MaxTokens: -1,
+	}
+	if err := validateRequest(req); err == nil {
+		t.Error("expected error for negative max_tokens")
+	}
+
+	req.MaxTokens = MaxMaxTokens + 1
+	if err := validateRequest(req); err == nil {
+		t.Error("expected error for exceeding max_tokens")
+	}
+}
+
+func TestValidateRequestTools(t *testing.T) {
+	req := &Request{
+		Messages: []Message{{Role: RoleUser, Content: "Hi"}},
+		Tools:    []Tool{{Name: ""}},
+	}
+	if err := validateRequest(req); err == nil {
+		t.Error("expected error for empty tool name")
+	}
+
+	req.Tools = []Tool{{Name: strings.Repeat("x", MaxToolNameLength+1)}}
+	if err := validateRequest(req); err == nil {
+		t.Error("expected error for long tool name")
+	}
+}
+
+func TestValidateRequestImageMIME(t *testing.T) {
+	// Valid MIME
+	req := &Request{
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: "Look",
+			Images:  []Image{{MimeType: "image/png", Data: []byte{1}}},
+		}},
+	}
+	if err := validateRequest(req); err != nil {
+		t.Errorf("unexpected error for valid image: %v", err)
+	}
+
+	// Invalid MIME
+	req.Messages[0].Images[0].MimeType = "application/pdf"
+	if err := validateRequest(req); err == nil {
+		t.Error("expected error for invalid MIME type")
+	}
+
+	// Empty MIME
+	req.Messages[0].Images[0].MimeType = ""
+	if err := validateRequest(req); err == nil {
+		t.Error("expected error for empty MIME type")
+	}
+
+	// Empty data
+	req.Messages[0].Images[0] = Image{MimeType: "image/jpeg", Data: nil}
+	if err := validateRequest(req); err == nil {
+		t.Error("expected error for empty image data")
+	}
+}
+
+func TestValidateRequestModelNameTooLong(t *testing.T) {
+	req := &Request{
+		Messages: []Message{{Role: RoleUser, Content: "Hi"}},
+		Model:    strings.Repeat("x", MaxModelNameLength+1),
+	}
+	if err := validateRequest(req); err == nil {
+		t.Error("expected error for long model name")
+	}
+}
+
+func TestValidateRequestPenalties(t *testing.T) {
+	req := &Request{
+		Messages:        []Message{{Role: RoleUser, Content: "Hi"}},
+		PresencePenalty: -3.0,
+	}
+	if err := validateRequest(req); err == nil {
+		t.Error("expected error for presence_penalty out of range")
+	}
+
+	req.PresencePenalty = 0
+	req.FrequencyPenalty = 3.0
+	if err := validateRequest(req); err == nil {
+		t.Error("expected error for frequency_penalty out of range")
+	}
+}
+
+func TestValidateRequestStopSequences(t *testing.T) {
+	// Too many stop sequences
+	stops := make([]string, MaxStopSequences+1)
+	for i := range stops {
+		stops[i] = "x"
+	}
+	req := &Request{
+		Messages: []Message{{Role: RoleUser, Content: "Hi"}},
+		Stop:     stops,
+	}
+	if err := validateRequest(req); err == nil {
+		t.Error("expected error for too many stop sequences")
+	}
+
+	// Stop sequence too long
+	req.Stop = []string{strings.Repeat("x", MaxStopSequenceLength+1)}
+	if err := validateRequest(req); err == nil {
+		t.Error("expected error for long stop sequence")
+	}
+}
+
+// --- sanitizeError tests ---
+
+func TestSanitizeErrorNil(t *testing.T) {
+	if sanitizeError(nil) != nil {
+		t.Error("nil should return nil")
+	}
+}
+
+func TestSanitizeErrorSentinel(t *testing.T) {
+	sentinels := []error{
+		ErrRateLimited, ErrTimeout, ErrCanceled, ErrEmptyResponse,
+		ErrNoProvider, ErrEmptyInput, ErrInputTooLong, ErrProvider,
+	}
+	for _, err := range sentinels {
+		if sanitizeError(err) != err {
+			t.Errorf("sentinel %v should pass through", err)
+		}
+	}
+}
+
+func TestSanitizeErrorRedactsAPIKeys(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+	}{
+		{"anthropic key", "error: sk-ant-api03-xxxxx invalid"},
+		{"openai key", "invalid api key: sk-proj-abcdef123"},
+		{"bearer token", "Authorization: Bearer tok_12345"},
+		{"api_key param", "url?api_key=secret123"},
+		{"apikey param", "header: apikey=mykey"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := sanitizeError(errors.New(tc.msg))
+			if err.Error() != "provider error (details redacted for security)" {
+				t.Errorf("expected redacted error, got %q", err.Error())
+			}
+		})
+	}
+}
+
+func TestSanitizeErrorSafeMessages(t *testing.T) {
+	err := sanitizeError(errors.New("connection refused"))
+	if err.Error() != "connection refused" {
+		t.Errorf("safe error should pass through, got %q", err.Error())
+	}
+}
+
+// --- WithRetryMaxDelay validation test ---
+
+func TestWithRetryMaxDelayPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic for too-small retry max delay")
+		}
+	}()
+	WithRetryMaxDelay(0)(&Client{})
+}
+
+func TestWithRetryMaxDelayTooLargePanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic for too-large retry max delay")
+		}
+	}()
+	WithRetryMaxDelay(10 * time.Minute)(&Client{})
+}
