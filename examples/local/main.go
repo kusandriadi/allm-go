@@ -41,10 +41,9 @@ func main() {
 	// --- Custom OpenAI-compatible server ---
 	// clientCustom := allm.New(
 	//     provider.Local("http://my-server:8080/v1",
-	//         provider.WithLocalModel("my-model"),
-	//         provider.WithLocalAPIKey("optional-key"),
-	//         provider.WithLocalMaxTokens(2048),
-	//         provider.WithLocalTemperature(0.7),
+	//         provider.WithDefaultModel("my-model"),
+	//         provider.WithMaxTokens(2048),
+	//         provider.WithTemperature(0.7),
 	//     ),
 	// )
 

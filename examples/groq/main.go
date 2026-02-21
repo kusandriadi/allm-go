@@ -1,4 +1,4 @@
-// Example: DeepSeek provider usage
+// Example: Groq provider usage
 package main
 
 import (
@@ -14,9 +14,9 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// --- Basic usage (reads DEEPSEEK_API_KEY from env) ---
+	// --- Basic usage (reads GROQ_API_KEY from env) ---
 	client := allm.New(
-		provider.DeepSeek(""),
+		provider.Groq(""),
 		allm.WithTimeout(30*time.Second),
 	)
 
@@ -28,31 +28,31 @@ func main() {
 	fmt.Printf("Model: %s | Tokens: %d in, %d out | Latency: %v\n\n",
 		resp.Model, resp.InputTokens, resp.OutputTokens, resp.Latency)
 
-	// --- DeepSeek Chat (default, general purpose) ---
-	clientChat := allm.New(
-		provider.DeepSeek("",
-			provider.WithDefaultModel(provider.DeepSeekChat),
+	// --- Use Llama 3.1 8B (faster) ---
+	clientFast := allm.New(
+		provider.Groq("",
+			provider.WithDefaultModel(provider.GroqLlama3_1_8B),
 		),
 	)
 
-	resp, err = clientChat.Complete(ctx, "Write a hello world in Go.")
+	resp, err = clientFast.Complete(ctx, "Write a hello world in Go.")
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("[Chat] %s\n\n", resp.Content)
+	fmt.Printf("[Llama 3.1 8B] %s\n\n", resp.Content)
 
-	// --- DeepSeek Reasoner (chain-of-thought reasoning) ---
-	clientReasoner := allm.New(
-		provider.DeepSeek("",
-			provider.WithDefaultModel(provider.DeepSeekReasoner),
+	// --- Use Mixtral ---
+	clientMixtral := allm.New(
+		provider.Groq("",
+			provider.WithDefaultModel(provider.GroqMixtral8x7B),
 		),
 	)
 
-	resp, err = clientReasoner.Complete(ctx, "What is the sum of all integers from 1 to 100?")
+	resp, err = clientMixtral.Complete(ctx, "Explain quantum computing in simple terms.")
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("[Reasoner] %s\n\n", resp.Content)
+	fmt.Printf("[Mixtral] %s\n\n", resp.Content)
 
 	// --- Multi-turn conversation ---
 	resp, err = client.Chat(ctx, []allm.Message{
@@ -67,7 +67,7 @@ func main() {
 
 	// --- With system prompt ---
 	clientWithSystem := allm.New(
-		provider.DeepSeek(""),
+		provider.Groq(""),
 		allm.WithSystemPrompt("You are a Go programming expert. Answer concisely."),
 	)
 
@@ -94,7 +94,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("\nAvailable DeepSeek models (%d):\n", len(models))
+	fmt.Printf("\nAvailable Groq models (%d):\n", len(models))
 	for _, m := range models {
 		fmt.Printf("  - %s\n", m.ID)
 	}

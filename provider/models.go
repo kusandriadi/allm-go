@@ -105,3 +105,37 @@ const (
 	// Text Embedding Ada 002 (legacy)
 	OpenAITextEmbeddingAda002 = "text-embedding-ada-002"
 )
+
+// Groq models.
+const (
+	// Llama 3.3 70B Versatile - Most capable
+	GroqLlama3_3_70B = "llama-3.3-70b-versatile"
+	// Llama 3.1 70B Versatile
+	GroqLlama3_1_70B = "llama-3.1-70b-versatile"
+	// Llama 3.1 8B Instant
+	GroqLlama3_1_8B = "llama-3.1-8b-instant"
+	// Mixtral 8x7B
+	GroqMixtral8x7B = "mixtral-8x7b-32768"
+	// Gemma 2 9B
+	GroqGemma2_9B = "gemma2-9b-it"
+)
+
+// Gemini models.
+const (
+	// Gemini 2.0 Flash - Fast and efficient
+	GeminiFlash2_0 = "gemini-2.0-flash"
+	// Gemini 1.5 Flash
+	GeminiFlash1_5 = "gemini-1.5-flash"
+	// Gemini 1.5 Pro
+	GeminiPro1_5 = "gemini-1.5-pro"
+)
+
+// Perplexity models.
+const (
+	// Llama 3.1 Sonar Small 128k Online - Real-time web search
+	PerplexityLlama3_1SonarSmall128kOnline = "llama-3.1-sonar-small-128k-online"
+	// Llama 3.1 Sonar Large 128k Online
+	PerplexityLlama3_1SonarLarge128kOnline = "llama-3.1-sonar-large-128k-online"
+	// Llama 3.1 Sonar Huge 128k Online
+	PerplexityLlama3_1SonarHuge128kOnline = "llama-3.1-sonar-huge-128k-online"
+)

@@ -93,12 +93,12 @@ func TestModelConstantsUsableAsOptions(t *testing.T) {
 		t.Errorf("expected gpt-5.2, got %q", p2.model)
 	}
 
-	p3 := DeepSeek("key", WithDeepSeekModel(DeepSeekReasoner))
+	p3 := DeepSeek("key", WithDefaultModel(DeepSeekReasoner))
 	if p3.model != "deepseek-reasoner" {
 		t.Errorf("expected deepseek-reasoner, got %q", p3.model)
 	}
 
-	p4 := GLM("key", WithGLMModel(GLM5))
+	p4 := GLM("key", WithDefaultModel(GLM5))
 	if p4.model != "glm-5" {
 		t.Errorf("expected glm-5, got %q", p4.model)
 	}

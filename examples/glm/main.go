@@ -31,7 +31,7 @@ func main() {
 	// --- Use a specific model ---
 	clientGLM5 := allm.New(
 		provider.GLM("",
-			provider.WithGLMModel(provider.GLM5),
+			provider.WithDefaultModel(provider.GLM5),
 		),
 	)
 
