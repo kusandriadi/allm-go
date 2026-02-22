@@ -81,6 +81,44 @@ func TestAnthropicExplicitKeyOverridesEnv(t *testing.T) {
 	}
 }
 
+func TestAnthropicAuthToken(t *testing.T) {
+	p := Anthropic("", WithAnthropicAuthToken("oauth-token"))
+	if p.authToken != "oauth-token" {
+		t.Errorf("expected oauth-token, got %q", p.authToken)
+	}
+	if !p.Available() {
+		t.Error("should be available with auth token")
+	}
+	// apiKey should remain empty when auth token is used
+	if p.apiKey != "" {
+		t.Errorf("expected empty apiKey when authToken set, got %q", p.apiKey)
+	}
+}
+
+func TestAnthropicAuthTokenEnv(t *testing.T) {
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "env-oauth-token")
+	p := Anthropic("")
+	if p.authToken != "env-oauth-token" {
+		t.Errorf("expected env oauth token, got %q", p.authToken)
+	}
+	if !p.Available() {
+		t.Error("should be available with env auth token")
+	}
+}
+
+func TestAnthropicAuthTokenPrecedence(t *testing.T) {
+	// Auth token takes precedence: when set, apiKey env should NOT be loaded
+	t.Setenv("ANTHROPIC_API_KEY", "env-key")
+	p := Anthropic("", WithAnthropicAuthToken("oauth-token"))
+	if p.authToken != "oauth-token" {
+		t.Errorf("expected oauth-token, got %q", p.authToken)
+	}
+	// apiKey should not be loaded from env when authToken is explicitly set
+	if p.apiKey != "" {
+		t.Errorf("expected empty apiKey when authToken set, got %q", p.apiKey)
+	}
+}
+
 // --- OpenAI ---
 
 func TestOpenAINew(t *testing.T) {

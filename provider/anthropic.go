@@ -32,6 +32,7 @@ func wrapAnthropicError(err error) error {
 // AnthropicProvider implements allm.Provider for Anthropic Claude.
 type AnthropicProvider struct {
 	apiKey      string
+	authToken   string // OAuth token (Claude Pro/Max subscription)
 	model       string
 	maxTokens   int
 	temperature float64
@@ -70,15 +71,22 @@ func WithAnthropicBaseURL(url string) AnthropicOption {
 	}
 }
 
-// Anthropic creates a new Anthropic provider.
-// If apiKey is empty, it reads from ANTHROPIC_API_KEY environment variable.
-func Anthropic(apiKey string, opts ...AnthropicOption) *AnthropicProvider {
-	if apiKey == "" {
-		apiKey = os.Getenv("ANTHROPIC_API_KEY")
+// WithAnthropicAuthToken sets an OAuth token for authentication (Claude Pro/Max subscription).
+// When set, uses Authorization: Bearer header instead of X-Api-Key.
+// Takes precedence over API key.
+func WithAnthropicAuthToken(token string) AnthropicOption {
+	return func(p *AnthropicProvider) {
+		p.authToken = token
 	}
+}
 
+// Anthropic creates a new Anthropic provider.
+//
+// Authentication (in order of precedence):
+//  1. WithAnthropicAuthToken option or ANTHROPIC_AUTH_TOKEN env → OAuth Bearer token (Claude Pro/Max)
+//  2. apiKey parameter or ANTHROPIC_API_KEY env → API key (direct Anthropic API)
+func Anthropic(apiKey string, opts ...AnthropicOption) *AnthropicProvider {
 	p := &AnthropicProvider{
-		apiKey:    apiKey,
 		model:     "claude-sonnet-4-20250514",
 		maxTokens: 4096,
 	}
@@ -86,6 +94,15 @@ func Anthropic(apiKey string, opts ...AnthropicOption) *AnthropicProvider {
 	for _, opt := range opts {
 		opt(p)
 	}
+
+	// Resolve auth: authToken takes precedence over apiKey
+	if p.authToken == "" {
+		p.authToken = os.Getenv("ANTHROPIC_AUTH_TOKEN")
+	}
+	if p.authToken == "" && apiKey == "" {
+		apiKey = os.Getenv("ANTHROPIC_API_KEY")
+	}
+	p.apiKey = apiKey
 
 	// Validate custom base URL for security (SSRF prevention)
 	if p.baseURL != "" {
@@ -96,7 +113,11 @@ func Anthropic(apiKey string, opts ...AnthropicOption) *AnthropicProvider {
 
 	// Create client once for connection reuse
 	var clientOpts []option.RequestOption
-	clientOpts = append(clientOpts, option.WithAPIKey(p.apiKey))
+	if p.authToken != "" {
+		clientOpts = append(clientOpts, option.WithAuthToken(p.authToken))
+	} else {
+		clientOpts = append(clientOpts, option.WithAPIKey(p.apiKey))
+	}
 	if p.baseURL != "" {
 		clientOpts = append(clientOpts, option.WithBaseURL(p.baseURL))
 	}
@@ -110,9 +131,9 @@ func (p *AnthropicProvider) Name() string {
 	return "anthropic"
 }
 
-// Available returns true if the API key is set.
+// Available returns true if authentication is configured (API key or OAuth token).
 func (p *AnthropicProvider) Available() bool {
-	return p.apiKey != ""
+	return p.apiKey != "" || p.authToken != ""
 }
 
 // buildParams builds MessageNewParams from an allm.Request.
