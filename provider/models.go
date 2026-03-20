@@ -130,6 +130,44 @@ const (
 	GeminiPro1_5 = "gemini-1.5-pro"
 )
 
+// Kimi (Moonshot AI) models.
+const (
+	// Moonshot V1 8K context
+	KimiMoonshotV1_8K = "moonshot-v1-8k"
+	// Moonshot V1 32K context
+	KimiMoonshotV1_32K = "moonshot-v1-32k"
+	// Moonshot V1 128K context
+	KimiMoonshotV1_128K = "moonshot-v1-128k"
+)
+
+// Qwen (Alibaba DashScope) models.
+const (
+	// Qwen Max - Most capable
+	QwenMax = "qwen-max"
+	// Qwen Plus - Balanced performance
+	QwenPlus = "qwen-plus"
+	// Qwen Turbo - Fast and cost-effective
+	QwenTurbo = "qwen-turbo"
+	// Qwen Long - Extended context
+	QwenLong = "qwen-long"
+	// QwQ Plus - Reasoning model
+	QwQPlus = "qwq-plus"
+)
+
+// Qwen Embedding models.
+const (
+	// Qwen Text Embedding V3
+	QwenTextEmbeddingV3 = "text-embedding-v3"
+)
+
+// MiniMax models.
+const (
+	// MiniMax Text 01 - Latest text model
+	MiniMaxText01 = "MiniMax-Text-01"
+	// MiniMax Text 01 128K - Extended context
+	MiniMaxText01_128K = "MiniMax-Text-01-128K"
+)
+
 // Perplexity models.
 const (
 	// Llama 3.1 Sonar Small 128k Online - Real-time web search

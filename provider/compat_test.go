@@ -287,6 +287,145 @@ func TestPerplexityEnvKey(t *testing.T) {
 	}
 }
 
+// --- Kimi ---
+
+func TestKimi(t *testing.T) {
+	p := Kimi("")
+	if p.Name() != "kimi" {
+		t.Errorf("expected 'kimi', got %q", p.Name())
+	}
+	if p.model != "moonshot-v1-8k" {
+		t.Errorf("expected default model, got %q", p.model)
+	}
+	if p.baseURL != "https://api.moonshot.cn/v1" {
+		t.Errorf("expected Kimi base URL, got %q", p.baseURL)
+	}
+}
+
+func TestKimiWithOptions(t *testing.T) {
+	p := Kimi("test-key", WithDefaultModel("moonshot-v1-128k"))
+	if p.apiKey != "test-key" {
+		t.Errorf("expected test-key, got %q", p.apiKey)
+	}
+	if p.model != "moonshot-v1-128k" {
+		t.Errorf("expected moonshot-v1-128k, got %q", p.model)
+	}
+}
+
+func TestKimiAvailable(t *testing.T) {
+	p := Kimi("key")
+	if !p.Available() {
+		t.Error("expected available with key")
+	}
+	p2 := Kimi("")
+	if p2.Available() {
+		t.Error("expected not available without key")
+	}
+}
+
+func TestKimiEnvKey(t *testing.T) {
+	t.Setenv("MOONSHOT_API_KEY", "env-key")
+	p := Kimi("")
+	if p.apiKey != "env-key" {
+		t.Errorf("expected env key, got %q", p.apiKey)
+	}
+}
+
+// --- Qwen ---
+
+func TestQwen(t *testing.T) {
+	p := Qwen("")
+	if p.Name() != "qwen" {
+		t.Errorf("expected 'qwen', got %q", p.Name())
+	}
+	if p.model != "qwen-plus" {
+		t.Errorf("expected default model, got %q", p.model)
+	}
+	if p.baseURL != "https://dashscope.aliyuncs.com/compatible-mode/v1" {
+		t.Errorf("expected Qwen base URL, got %q", p.baseURL)
+	}
+}
+
+func TestQwenWithOptions(t *testing.T) {
+	p := Qwen("test-key", WithDefaultModel("qwen-max"))
+	if p.apiKey != "test-key" {
+		t.Errorf("expected test-key, got %q", p.apiKey)
+	}
+	if p.model != "qwen-max" {
+		t.Errorf("expected qwen-max, got %q", p.model)
+	}
+}
+
+func TestQwenAvailable(t *testing.T) {
+	p := Qwen("key")
+	if !p.Available() {
+		t.Error("expected available with key")
+	}
+	p2 := Qwen("")
+	if p2.Available() {
+		t.Error("expected not available without key")
+	}
+}
+
+func TestQwenEnvKey(t *testing.T) {
+	t.Setenv("DASHSCOPE_API_KEY", "env-key")
+	p := Qwen("")
+	if p.apiKey != "env-key" {
+		t.Errorf("expected env key, got %q", p.apiKey)
+	}
+}
+
+func TestEmbedSupportQwen(t *testing.T) {
+	p := Qwen("key")
+	if p.embedModel != "text-embedding-v3" {
+		t.Errorf("expected text-embedding-v3, got %q", p.embedModel)
+	}
+}
+
+// --- MiniMax ---
+
+func TestMiniMax(t *testing.T) {
+	p := MiniMax("")
+	if p.Name() != "minimax" {
+		t.Errorf("expected 'minimax', got %q", p.Name())
+	}
+	if p.model != "MiniMax-Text-01" {
+		t.Errorf("expected default model, got %q", p.model)
+	}
+	if p.baseURL != "https://api.minimax.chat/v1" {
+		t.Errorf("expected MiniMax base URL, got %q", p.baseURL)
+	}
+}
+
+func TestMiniMaxWithOptions(t *testing.T) {
+	p := MiniMax("test-key", WithDefaultModel("abab6.5s-chat"))
+	if p.apiKey != "test-key" {
+		t.Errorf("expected test-key, got %q", p.apiKey)
+	}
+	if p.model != "abab6.5s-chat" {
+		t.Errorf("expected abab6.5s-chat, got %q", p.model)
+	}
+}
+
+func TestMiniMaxAvailable(t *testing.T) {
+	p := MiniMax("key")
+	if !p.Available() {
+		t.Error("expected available with key")
+	}
+	p2 := MiniMax("")
+	if p2.Available() {
+		t.Error("expected not available without key")
+	}
+}
+
+func TestMiniMaxEnvKey(t *testing.T) {
+	t.Setenv("MINIMAX_API_KEY", "env-key")
+	p := MiniMax("")
+	if p.apiKey != "env-key" {
+		t.Errorf("expected env key, got %q", p.apiKey)
+	}
+}
+
 // --- Local (new implementation) ---
 
 func TestLocalCompat(t *testing.T) {

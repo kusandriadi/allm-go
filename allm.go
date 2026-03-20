@@ -38,7 +38,7 @@ import (
 )
 
 // Version of the allm-go library
-const Version = "0.6.1"
+const Version = "0.6.2"
 
 // Common errors
 var (

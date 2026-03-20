@@ -58,6 +58,27 @@ var knownProviders = map[allm.ProviderName]providerRegistry{
 		envKey:       "PERPLEXITY_API_KEY",
 		embedSupport: false,
 	},
+	allm.Kimi: {
+		baseURL:       "https://api.moonshot.cn/v1",
+		defaultModel:  "moonshot-v1-8k",
+		envKey:        "MOONSHOT_API_KEY",
+		embedSupport:  false,
+		visionSupport: true,
+	},
+	allm.Qwen: {
+		baseURL:       "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		defaultModel:  "qwen-plus",
+		envKey:        "DASHSCOPE_API_KEY",
+		embedSupport:  true,
+		visionSupport: true,
+	},
+	allm.MiniMax: {
+		baseURL:       "https://api.minimax.chat/v1",
+		defaultModel:  "MiniMax-Text-01",
+		envKey:        "MINIMAX_API_KEY",
+		embedSupport:  false,
+		visionSupport: false,
+	},
 	allm.Local: {
 		baseURL:      "http://localhost:11434/v1",
 		defaultModel: "llama3",
@@ -152,6 +173,8 @@ func OpenAICompatible(name allm.ProviderName, apiKey string, opts ...CompatOptio
 		if reg.embedSupport {
 			if name == allm.GLM {
 				p.embedModel = "embedding-3"
+			} else if name == allm.Qwen {
+				p.embedModel = "text-embedding-v3"
 			} else if name == allm.Local {
 				p.embedModel = p.model // Local uses chat model for embeddings by default
 			}

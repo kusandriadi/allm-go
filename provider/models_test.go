@@ -81,6 +81,47 @@ func TestGLMModelConstants(t *testing.T) {
 	}
 }
 
+func TestKimiModelConstants(t *testing.T) {
+	models := map[string]string{
+		"KimiMoonshotV1_8K":   KimiMoonshotV1_8K,
+		"KimiMoonshotV1_32K":  KimiMoonshotV1_32K,
+		"KimiMoonshotV1_128K": KimiMoonshotV1_128K,
+	}
+	for name, val := range models {
+		if val == "" {
+			t.Errorf("%s is empty", name)
+		}
+	}
+}
+
+func TestQwenModelConstants(t *testing.T) {
+	models := map[string]string{
+		"QwenMax":             QwenMax,
+		"QwenPlus":            QwenPlus,
+		"QwenTurbo":           QwenTurbo,
+		"QwenLong":            QwenLong,
+		"QwQPlus":             QwQPlus,
+		"QwenTextEmbeddingV3": QwenTextEmbeddingV3,
+	}
+	for name, val := range models {
+		if val == "" {
+			t.Errorf("%s is empty", name)
+		}
+	}
+}
+
+func TestMiniMaxModelConstants(t *testing.T) {
+	models := map[string]string{
+		"MiniMaxText01":      MiniMaxText01,
+		"MiniMaxText01_128K": MiniMaxText01_128K,
+	}
+	for name, val := range models {
+		if val == "" {
+			t.Errorf("%s is empty", name)
+		}
+	}
+}
+
 func TestModelConstantsUsableAsOptions(t *testing.T) {
 	// Verify model constants work with provider options
 	p1 := Anthropic("key", WithAnthropicModel(AnthropicClaudeOpus4_6))

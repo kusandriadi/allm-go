@@ -19,6 +19,12 @@ const (
 	GLM ProviderName = "glm"
 	// Perplexity is the name for Perplexity models.
 	Perplexity ProviderName = "perplexity"
+	// Kimi is the name for Moonshot AI Kimi models.
+	Kimi ProviderName = "kimi"
+	// Qwen is the name for Alibaba Qwen models (via DashScope).
+	Qwen ProviderName = "qwen"
+	// MiniMax is the name for MiniMax models.
+	MiniMax ProviderName = "minimax"
 	// Local is the name for local/self-hosted models (Ollama, vLLM, etc).
 	Local ProviderName = "local"
 )

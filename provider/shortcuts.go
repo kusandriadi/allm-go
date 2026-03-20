@@ -32,6 +32,24 @@ func Perplexity(apiKey string, opts ...CompatOption) *OpenAICompatibleProvider {
 	return OpenAICompatible(allm.Perplexity, apiKey, opts...)
 }
 
+// Kimi creates a new Moonshot AI Kimi provider.
+// If apiKey is empty, it reads from MOONSHOT_API_KEY environment variable.
+func Kimi(apiKey string, opts ...CompatOption) *OpenAICompatibleProvider {
+	return OpenAICompatible(allm.Kimi, apiKey, opts...)
+}
+
+// Qwen creates a new Alibaba Qwen provider (via DashScope).
+// If apiKey is empty, it reads from DASHSCOPE_API_KEY environment variable.
+func Qwen(apiKey string, opts ...CompatOption) *OpenAICompatibleProvider {
+	return OpenAICompatible(allm.Qwen, apiKey, opts...)
+}
+
+// MiniMax creates a new MiniMax provider.
+// If apiKey is empty, it reads from MINIMAX_API_KEY environment variable.
+func MiniMax(apiKey string, opts ...CompatOption) *OpenAICompatibleProvider {
+	return OpenAICompatible(allm.MiniMax, apiKey, opts...)
+}
+
 // Local creates a Local provider for OpenAI-compatible servers.
 // The baseURL parameter specifies the server endpoint (e.g., "http://localhost:11434/v1").
 // If baseURL is empty, defaults to http://localhost:11434/v1 (Ollama).
