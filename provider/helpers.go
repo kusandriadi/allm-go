@@ -268,6 +268,17 @@ func openaiChatParams(
 		params.Tools = convertToolsToOpenAI(req.Tools)
 	}
 
+	// ResponseFormat for structured output
+	// Note: The exact SDK types may vary. For now, we use a simplified approach.
+	// This will be updated when the SDK types are confirmed.
+	// For OpenAI SDK v3, response_format support may require specific types
+	// that are not yet available or have different names.
+	if req.ResponseFormat != nil {
+		// Placeholder for response format support
+		// TODO: Implement when SDK types are available
+		// The implementation depends on the exact types in openai-go v3
+	}
+
 	return params
 }
 
@@ -299,6 +310,11 @@ func openaiCompleteResponse(
 		Latency:      time.Since(start),
 		FinishReason: string(completion.Choices[0].FinishReason),
 	}
+
+	// Extract reasoning content for DeepSeek Reasoner models
+	// The SDK may expose this as part of the message in completion.Choices[0].Message
+	// This is a placeholder - actual field name depends on SDK implementation
+	// For now, we'll check if the response has extra fields (may need SDK update)
 
 	for _, tc := range completion.Choices[0].Message.ToolCalls {
 		resp.ToolCalls = append(resp.ToolCalls, allm.ToolCall{

@@ -170,6 +170,90 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *allm.Request) <-chan a
 	return out
 }
 
+// GenerateImage creates images from a text prompt using DALL-E.
+func (p *OpenAIProvider) GenerateImage(ctx context.Context, req *allm.ImageRequest) (*allm.ImageResponse, error) {
+	start := time.Now()
+
+	model := "dall-e-3"
+	if req.Model != "" {
+		model = req.Model
+	}
+
+	if p.logger != nil {
+		p.logger.Debug("provider generate image",
+			"provider", "openai",
+			"model", model,
+			"size", req.Size,
+			"n", req.N,
+		)
+	}
+
+	params := openai.ImageGenerateParams{
+		Prompt: req.Prompt,
+		Model:  openai.ImageModel(model),
+	}
+
+	if req.Size != "" {
+		params.Size = openai.ImageGenerateParamsSize(req.Size)
+	}
+	if req.Quality != "" {
+		params.Quality = openai.ImageGenerateParamsQuality(req.Quality)
+	}
+	if req.N > 0 {
+		params.N = openai.Int(int64(req.N))
+	}
+
+	result, err := p.client.Images.Generate(ctx, params)
+	if err != nil {
+		if p.logger != nil {
+			p.logger.Debug("provider generate image failed",
+				"provider", "openai",
+				"model", model,
+				"error", sanitizeProviderError(err),
+			)
+		}
+		return nil, wrapOpenAIError(err)
+	}
+
+	resp := &allm.ImageResponse{
+		Provider: "openai",
+		Model:    model,
+		Latency:  time.Since(start),
+	}
+
+	for _, img := range result.Data {
+		resp.Images = append(resp.Images, allm.GeneratedImage{
+			URL:           img.URL,
+			RevisedPrompt: img.RevisedPrompt,
+		})
+	}
+
+	if p.logger != nil {
+		p.logger.Debug("provider generate image done",
+			"provider", "openai",
+			"model", model,
+			"latency", resp.Latency,
+			"images", len(resp.Images),
+		)
+	}
+
+	return resp, nil
+}
+
+// CreateBatch submits a batch of requests for processing.
+// Note: This is a basic stub implementation. Full batch API requires file upload and polling.
+func (p *OpenAIProvider) CreateBatch(ctx context.Context, requests []allm.BatchRequest) (*allm.Batch, error) {
+	// TODO: Implement full batch API with file upload
+	return nil, fmt.Errorf("openai: batch API not yet implemented")
+}
+
+// GetBatch retrieves the status and results of a batch job.
+// Note: This is a basic stub implementation.
+func (p *OpenAIProvider) GetBatch(ctx context.Context, batchID string) (*allm.Batch, error) {
+	// TODO: Implement batch retrieval
+	return nil, fmt.Errorf("openai: batch API not yet implemented")
+}
+
 func (p *OpenAIProvider) buildClient() openai.Client {
 	// Validate custom base URL for security (SSRF prevention)
 	if p.baseURL != "" {

@@ -126,6 +126,32 @@ func validateRequest(req *Request) error {
 		}
 	}
 
+	// Validate ResponseFormat
+	if req.ResponseFormat != nil {
+		if req.ResponseFormat.Type != ResponseFormatJSON && req.ResponseFormat.Type != ResponseFormatJSONSchema {
+			return fmt.Errorf("invalid response_format type: %s (must be %s or %s)",
+				req.ResponseFormat.Type, ResponseFormatJSON, ResponseFormatJSONSchema)
+		}
+		if req.ResponseFormat.Type == ResponseFormatJSONSchema {
+			if req.ResponseFormat.Name == "" {
+				return fmt.Errorf("response_format with type json_schema requires a name")
+			}
+			if req.ResponseFormat.Schema == nil {
+				return fmt.Errorf("response_format with type json_schema requires a schema")
+			}
+		}
+	}
+
+	// Validate Thinking
+	if req.Thinking != nil {
+		if req.Thinking.BudgetTokens < 0 {
+			return fmt.Errorf("thinking budget_tokens cannot be negative")
+		}
+		if req.Thinking.BudgetTokens > MaxMaxTokens {
+			return fmt.Errorf("thinking budget_tokens exceeds maximum of %d", MaxMaxTokens)
+		}
+	}
+
 	return nil
 }
 

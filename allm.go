@@ -38,7 +38,7 @@ import (
 )
 
 // Version of the allm-go library
-const Version = "0.7.3"
+const Version = "0.8.0"
 
 // Common errors
 var (
@@ -61,11 +61,12 @@ const (
 
 // Message represents a chat message.
 type Message struct {
-	Role        string       // "system", "user", "assistant", or "tool"
-	Content     string       // Text content
-	Images      []Image      // Optional images (for vision models)
-	ToolCalls   []ToolCall   // Tool calls requested by assistant (role=assistant)
-	ToolResults []ToolResult // Tool results from user (role=tool)
+	Role         string        // "system", "user", "assistant", or "tool"
+	Content      string        // Text content
+	Images       []Image       // Optional images (for vision models)
+	ToolCalls    []ToolCall    // Tool calls requested by assistant (role=assistant)
+	ToolResults  []ToolResult  // Tool results from user (role=tool)
+	CacheControl *CacheControl // Prompt caching control (Anthropic)
 }
 
 // Image represents an image for vision models.
@@ -97,6 +98,103 @@ type ToolResult struct {
 
 // RoleTool is the role for messages carrying tool results.
 const RoleTool = "tool"
+
+// ResponseFormat constants for structured output.
+const (
+	ResponseFormatJSON       = "json_object"
+	ResponseFormatJSONSchema = "json_schema"
+)
+
+// ResponseFormat specifies the format for structured output.
+type ResponseFormat struct {
+	Type   string         // "json_object" or "json_schema"
+	Schema map[string]any // JSON Schema (for json_schema type)
+	Name   string         // Schema name (for json_schema type)
+}
+
+// CacheControl constants for prompt caching.
+const (
+	CacheEphemeral = "ephemeral"
+)
+
+// CacheControl marks content for prompt caching.
+type CacheControl struct {
+	Type string // typically "ephemeral"
+}
+
+// ThinkingConfig configures extended thinking/reasoning.
+type ThinkingConfig struct {
+	Type         string // "enabled" for Anthropic
+	BudgetTokens int    // token budget for thinking
+}
+
+// Truncation strategy constants.
+const (
+	TruncateTail = "tail" // keep latest messages
+	TruncateNone = "none" // error if over limit
+)
+
+// TokenCount represents pre-request token counting result.
+type TokenCount struct {
+	InputTokens int    // Estimated input tokens
+	Provider    string // Provider name
+	Model       string // Model used
+}
+
+// BatchRequest represents a single request in a batch.
+type BatchRequest struct {
+	CustomID  string    // Custom identifier for this request
+	Messages  []Message // Chat messages
+	Model     string    // Model to use
+	MaxTokens int       // Max tokens to generate
+}
+
+// Batch represents a batch processing job.
+type Batch struct {
+	ID      string        // Batch job ID
+	Status  string        // Job status (e.g., "processing", "completed")
+	Results []BatchResult // Results (when completed)
+}
+
+// BatchResult represents the result of a single batch request.
+type BatchResult struct {
+	CustomID string    // Matches BatchRequest.CustomID
+	Response *Response // Response (nil if error)
+	Error    error     // Error (nil if success)
+}
+
+// Image size constants for image generation.
+const (
+	ImageSize256  = "256x256"
+	ImageSize512  = "512x512"
+	ImageSize1024 = "1024x1024"
+	ImageSize1792 = "1024x1792"
+	ImageSize1536 = "1792x1024"
+)
+
+// ImageRequest represents an image generation request.
+type ImageRequest struct {
+	Prompt  string // Text prompt for image generation
+	Model   string // Image model (empty = provider default)
+	Size    string // Image size (e.g., "1024x1024")
+	Quality string // Image quality (e.g., "standard", "hd")
+	N       int    // Number of images to generate
+}
+
+// GeneratedImage represents a single generated image.
+type GeneratedImage struct {
+	Data          []byte // Image data (if available)
+	URL           string // Image URL (if provider returns URL)
+	RevisedPrompt string // Revised prompt (if provider modified it)
+}
+
+// ImageResponse represents the result of image generation.
+type ImageResponse struct {
+	Images   []GeneratedImage // Generated images
+	Provider string           // Provider name
+	Model    string           // Model used
+	Latency  time.Duration    // Request latency
+}
 
 // Logger is the interface for structured logging.
 // *slog.Logger satisfies this interface out of the box.
@@ -133,26 +231,32 @@ type Hook func(event HookEvent)
 // Request contains parameters for an LLM request.
 type Request struct {
 	Messages         []Message
-	Model            string   // Model to use (empty = provider default)
-	MaxTokens        int      // Max tokens to generate (0 = provider default)
-	Temperature      float64  // Sampling temperature (0 = provider default)
-	TopP             float64  // Nucleus sampling (0 = provider default)
-	Stop             []string // Stop sequences
-	PresencePenalty  float64  // Presence penalty (-2.0 to 2.0, 0 = default)
-	FrequencyPenalty float64  // Frequency penalty (-2.0 to 2.0, 0 = default)
-	Tools            []Tool   // Available tools the model can call
+	Model            string          // Model to use (empty = provider default)
+	MaxTokens        int             // Max tokens to generate (0 = provider default)
+	Temperature      float64         // Sampling temperature (0 = provider default)
+	TopP             float64         // Nucleus sampling (0 = provider default)
+	Stop             []string        // Stop sequences
+	PresencePenalty  float64         // Presence penalty (-2.0 to 2.0, 0 = default)
+	FrequencyPenalty float64         // Frequency penalty (-2.0 to 2.0, 0 = default)
+	Tools            []Tool          // Available tools the model can call
+	ResponseFormat   *ResponseFormat // Structured output format (JSON mode/schema)
+	Thinking         *ThinkingConfig // Extended thinking/reasoning config
 }
 
 // Response contains the LLM response.
 type Response struct {
-	Content      string        // Generated text
-	ToolCalls    []ToolCall    // Tool calls requested by the model (when FinishReason is "tool_use" or "tool_calls")
-	Provider     string        // Provider name (e.g., "anthropic")
-	Model        string        // Model used (e.g., "claude-sonnet-4-20250514")
-	InputTokens  int           // Tokens in input
-	OutputTokens int           // Tokens in output
-	Latency      time.Duration // Request latency
-	FinishReason string        // Why generation stopped
+	Content          string        // Generated text
+	ToolCalls        []ToolCall    // Tool calls requested by the model (when FinishReason is "tool_use" or "tool_calls")
+	Provider         string        // Provider name (e.g., "anthropic")
+	Model            string        // Model used (e.g., "claude-sonnet-4-20250514")
+	InputTokens      int           // Tokens in input
+	OutputTokens     int           // Tokens in output
+	Latency          time.Duration // Request latency
+	FinishReason     string        // Why generation stopped
+	Thinking         string        // Extended thinking/reasoning content
+	ThinkingTokens   int           // Tokens used for thinking
+	CacheReadTokens  int           // Tokens read from cache
+	CacheWriteTokens int           // Tokens written to cache
 }
 
 // StreamChunk represents a chunk of streamed response.
@@ -206,6 +310,30 @@ type ModelLister interface {
 type Embedder interface {
 	// Embed generates embeddings for the given texts.
 	Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error)
+}
+
+// TokenCounter is an optional interface for pre-request token counting.
+// Supported by: Anthropic (via messages.count_tokens endpoint).
+type TokenCounter interface {
+	// CountTokens estimates input tokens for a request.
+	CountTokens(ctx context.Context, req *Request) (*TokenCount, error)
+}
+
+// BatchProvider is an optional interface for batch processing.
+// Supported by: OpenAI, Anthropic.
+type BatchProvider interface {
+	// CreateBatch submits a batch of requests for processing.
+	CreateBatch(ctx context.Context, requests []BatchRequest) (*Batch, error)
+
+	// GetBatch retrieves the status and results of a batch job.
+	GetBatch(ctx context.Context, batchID string) (*Batch, error)
+}
+
+// ImageGenerator is an optional interface for image generation.
+// Supported by: OpenAI (DALL-E).
+type ImageGenerator interface {
+	// GenerateImage creates images from a text prompt.
+	GenerateImage(ctx context.Context, req *ImageRequest) (*ImageResponse, error)
 }
 
 // Model represents an available LLM model.
@@ -348,46 +476,87 @@ func WithHook(hook Hook) Option {
 	}
 }
 
+// WithResponseFormat sets the response format for structured output.
+func WithResponseFormat(rf *ResponseFormat) Option {
+	return func(c *Client) {
+		c.responseFormat = rf
+	}
+}
+
+// WithThinking enables extended thinking/reasoning with a token budget.
+func WithThinking(budgetTokens int) Option {
+	return func(c *Client) {
+		c.thinking = &ThinkingConfig{
+			Type:         "enabled",
+			BudgetTokens: budgetTokens,
+		}
+	}
+}
+
+// WithMaxContextTokens sets a soft limit on context tokens.
+// Requires provider to support TokenCounter interface.
+func WithMaxContextTokens(n int) Option {
+	return func(c *Client) {
+		c.maxContextTokens = n
+	}
+}
+
+// WithTruncationStrategy sets how to handle context exceeding MaxContextTokens.
+// "tail" keeps latest messages, "none" returns an error.
+func WithTruncationStrategy(strategy string) Option {
+	return func(c *Client) {
+		c.truncationStrategy = strategy
+	}
+}
+
 // Client is the main interface for interacting with LLMs.
 // It is safe for concurrent use.
 type Client struct {
-	mu               sync.RWMutex
-	provider         Provider
-	timeout          time.Duration
-	maxInputLen      int
-	systemPrompt     string
-	model            string        // default chat model
-	maxTokens        int           // default max tokens
-	temperature      float64       // default temperature
-	presencePenalty  float64       // default presence penalty
-	frequencyPenalty float64       // default frequency penalty
-	embeddingModel   string        // default embedding model
-	tools            []Tool        // available tools for function calling
-	maxRetries       int           // 0 = no retry (default)
-	retryBaseDelay   time.Duration // initial backoff delay (default 1s)
-	retryMaxDelay    time.Duration // max backoff delay (default 30s)
-	logger           Logger        // structured logger (nil = no logging)
-	hook             Hook          // event callback (nil = no hook)
+	mu                 sync.RWMutex
+	provider           Provider
+	timeout            time.Duration
+	maxInputLen        int
+	systemPrompt       string
+	model              string          // default chat model
+	maxTokens          int             // default max tokens
+	temperature        float64         // default temperature
+	presencePenalty    float64         // default presence penalty
+	frequencyPenalty   float64         // default frequency penalty
+	embeddingModel     string          // default embedding model
+	tools              []Tool          // available tools for function calling
+	maxRetries         int             // 0 = no retry (default)
+	retryBaseDelay     time.Duration   // initial backoff delay (default 1s)
+	retryMaxDelay      time.Duration   // max backoff delay (default 30s)
+	logger             Logger          // structured logger (nil = no logging)
+	hook               Hook            // event callback (nil = no hook)
+	responseFormat     *ResponseFormat // structured output format
+	thinking           *ThinkingConfig // extended thinking config
+	maxContextTokens   int             // soft limit on context tokens
+	truncationStrategy string          // "tail" or "none"
 }
 
 // clientState holds a snapshot of client fields for use without holding the lock.
 type clientState struct {
-	provider         Provider
-	timeout          time.Duration
-	maxInputLen      int
-	systemPrompt     string
-	model            string
-	maxTokens        int
-	temperature      float64
-	presencePenalty  float64
-	frequencyPenalty float64
-	embeddingModel   string
-	tools            []Tool
-	maxRetries       int
-	retryBaseDelay   time.Duration
-	retryMaxDelay    time.Duration
-	logger           Logger
-	hook             Hook
+	provider           Provider
+	timeout            time.Duration
+	maxInputLen        int
+	systemPrompt       string
+	model              string
+	maxTokens          int
+	temperature        float64
+	presencePenalty    float64
+	frequencyPenalty   float64
+	embeddingModel     string
+	tools              []Tool
+	maxRetries         int
+	retryBaseDelay     time.Duration
+	retryMaxDelay      time.Duration
+	logger             Logger
+	hook               Hook
+	responseFormat     *ResponseFormat
+	thinking           *ThinkingConfig
+	maxContextTokens   int
+	truncationStrategy string
 }
 
 // snapshot captures the current client state under a read lock.
@@ -395,22 +564,26 @@ func (c *Client) snapshot() clientState {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return clientState{
-		provider:         c.provider,
-		timeout:          c.timeout,
-		maxInputLen:      c.maxInputLen,
-		systemPrompt:     c.systemPrompt,
-		model:            c.model,
-		maxTokens:        c.maxTokens,
-		temperature:      c.temperature,
-		presencePenalty:  c.presencePenalty,
-		frequencyPenalty: c.frequencyPenalty,
-		embeddingModel:   c.embeddingModel,
-		tools:            c.tools,
-		maxRetries:       c.maxRetries,
-		retryBaseDelay:   c.retryBaseDelay,
-		retryMaxDelay:    c.retryMaxDelay,
-		logger:           c.logger,
-		hook:             c.hook,
+		provider:           c.provider,
+		timeout:            c.timeout,
+		maxInputLen:        c.maxInputLen,
+		systemPrompt:       c.systemPrompt,
+		model:              c.model,
+		maxTokens:          c.maxTokens,
+		temperature:        c.temperature,
+		presencePenalty:    c.presencePenalty,
+		frequencyPenalty:   c.frequencyPenalty,
+		embeddingModel:     c.embeddingModel,
+		tools:              c.tools,
+		maxRetries:         c.maxRetries,
+		retryBaseDelay:     c.retryBaseDelay,
+		retryMaxDelay:      c.retryMaxDelay,
+		logger:             c.logger,
+		hook:               c.hook,
+		responseFormat:     c.responseFormat,
+		thinking:           c.thinking,
+		maxContextTokens:   c.maxContextTokens,
+		truncationStrategy: c.truncationStrategy,
 	}
 }
 
@@ -468,6 +641,8 @@ func buildRequest(messages []Message, s clientState) *Request {
 		PresencePenalty:  s.presencePenalty,
 		FrequencyPenalty: s.frequencyPenalty,
 		Tools:            s.tools,
+		ResponseFormat:   s.responseFormat,
+		Thinking:         s.thinking,
 	}
 }
 
@@ -545,6 +720,83 @@ func requestMeta(messages []Message, s clientState) []any {
 	return meta
 }
 
+// truncateMessages applies context window management if maxContextTokens is set.
+// Returns truncated messages or an error if truncation fails.
+func truncateMessages(ctx context.Context, s clientState, messages []Message) ([]Message, error) {
+	// Check if provider supports token counting
+	counter, ok := s.provider.(TokenCounter)
+	if !ok {
+		// Provider doesn't support token counting, return messages as-is
+		return messages, nil
+	}
+
+	// Build a temporary request to count tokens
+	tempReq := buildRequest(messages, s)
+	count, err := counter.CountTokens(ctx, tempReq)
+	if err != nil {
+		// If counting fails, return messages as-is (fail open)
+		if s.logger != nil {
+			s.logger.Debug("token counting failed, skipping truncation", "error", err)
+		}
+		return messages, nil
+	}
+
+	// Check if we're over the limit
+	if count.InputTokens <= s.maxContextTokens {
+		return messages, nil
+	}
+
+	// Over limit - apply truncation strategy
+	strategy := s.truncationStrategy
+	if strategy == "" {
+		strategy = TruncateNone // default to error
+	}
+
+	if strategy == TruncateNone {
+		return nil, fmt.Errorf("context exceeds max tokens (%d > %d)", count.InputTokens, s.maxContextTokens)
+	}
+
+	if strategy == TruncateTail {
+		// Keep system messages and remove oldest non-system messages
+		var systemMsgs []Message
+		var otherMsgs []Message
+		for _, m := range messages {
+			if m.Role == RoleSystem {
+				systemMsgs = append(systemMsgs, m)
+			} else {
+				otherMsgs = append(otherMsgs, m)
+			}
+		}
+
+		// Binary search for the right cutoff point
+		// Start by removing oldest messages until we're under the limit
+		for len(otherMsgs) > 1 {
+			// Remove the oldest non-system message
+			otherMsgs = otherMsgs[1:]
+			truncated := append(systemMsgs, otherMsgs...)
+
+			tempReq := buildRequest(truncated, s)
+			count, err := counter.CountTokens(ctx, tempReq)
+			if err != nil {
+				// If counting fails, return what we have
+				return truncated, nil
+			}
+
+			if count.InputTokens <= s.maxContextTokens {
+				return truncated, nil
+			}
+		}
+
+		// If we still can't fit, return at least one message
+		if len(otherMsgs) > 0 {
+			return append(systemMsgs, otherMsgs...), nil
+		}
+		return systemMsgs, nil
+	}
+
+	return nil, fmt.Errorf("unknown truncation strategy: %s", strategy)
+}
+
 // Complete sends a simple text completion request.
 func (c *Client) Complete(ctx context.Context, prompt string) (*Response, error) {
 	return c.Chat(ctx, []Message{{Role: RoleUser, Content: prompt}})
@@ -569,7 +821,26 @@ func (c *Client) Chat(ctx context.Context, messages []Message) (*Response, error
 		return nil, err
 	}
 
-	req := buildRequest(messages, s)
+	// Context window management: truncate if needed
+	truncatedMessages := messages
+	if s.maxContextTokens > 0 {
+		var err error
+		truncatedMessages, err = truncateMessages(ctx, s, messages)
+		if err != nil {
+			if s.logger != nil {
+				s.logger.Debug("context truncation failed", "error", err)
+			}
+			return nil, fmt.Errorf("context truncation: %w", err)
+		}
+		if len(truncatedMessages) < len(messages) && s.logger != nil {
+			s.logger.Debug("context truncated",
+				"original_messages", len(messages),
+				"truncated_messages", len(truncatedMessages),
+			)
+		}
+	}
+
+	req := buildRequest(truncatedMessages, s)
 
 	// Validate request parameters for security
 	if err := validateRequest(req); err != nil {
@@ -793,4 +1064,161 @@ func (c *Client) SetTools(tools ...Tool) {
 	c.mu.Lock()
 	c.tools = tools
 	c.mu.Unlock()
+}
+
+// CountTokens estimates input tokens for the given messages.
+// Returns an error if the provider does not support token counting.
+func (c *Client) CountTokens(ctx context.Context, messages []Message) (*TokenCount, error) {
+	s := c.snapshot()
+
+	if s.provider == nil {
+		return nil, ErrNoProvider
+	}
+
+	counter, ok := s.provider.(TokenCounter)
+	if !ok {
+		return nil, fmt.Errorf("allm: provider does not support token counting")
+	}
+
+	if err := validateMessages(messages, s.maxInputLen); err != nil {
+		return nil, err
+	}
+
+	req := buildRequest(messages, s)
+
+	if s.logger != nil {
+		s.logger.Debug("count tokens request",
+			"provider", s.provider.Name(),
+			"model", s.model,
+			"messages", len(messages),
+		)
+	}
+
+	return counter.CountTokens(ctx, req)
+}
+
+// CreateBatch submits a batch of requests for processing.
+// Returns an error if the provider does not support batch processing.
+func (c *Client) CreateBatch(ctx context.Context, requests []BatchRequest) (*Batch, error) {
+	c.mu.RLock()
+	p := c.provider
+	logger := c.logger
+	c.mu.RUnlock()
+
+	if p == nil {
+		return nil, ErrNoProvider
+	}
+
+	batcher, ok := p.(BatchProvider)
+	if !ok {
+		return nil, fmt.Errorf("allm: provider does not support batch processing")
+	}
+
+	if logger != nil {
+		logger.Debug("create batch request",
+			"provider", p.Name(),
+			"requests", len(requests),
+		)
+	}
+
+	return batcher.CreateBatch(ctx, requests)
+}
+
+// GetBatch retrieves the status and results of a batch job.
+// Returns an error if the provider does not support batch processing.
+func (c *Client) GetBatch(ctx context.Context, batchID string) (*Batch, error) {
+	c.mu.RLock()
+	p := c.provider
+	logger := c.logger
+	c.mu.RUnlock()
+
+	if p == nil {
+		return nil, ErrNoProvider
+	}
+
+	batcher, ok := p.(BatchProvider)
+	if !ok {
+		return nil, fmt.Errorf("allm: provider does not support batch processing")
+	}
+
+	if logger != nil {
+		logger.Debug("get batch request",
+			"provider", p.Name(),
+			"batch_id", batchID,
+		)
+	}
+
+	return batcher.GetBatch(ctx, batchID)
+}
+
+// ImageOption configures image generation.
+type ImageOption func(*ImageRequest)
+
+// WithImageModel sets the image generation model.
+func WithImageModel(model string) ImageOption {
+	return func(r *ImageRequest) {
+		r.Model = model
+	}
+}
+
+// WithImageSize sets the image size.
+func WithImageSize(size string) ImageOption {
+	return func(r *ImageRequest) {
+		r.Size = size
+	}
+}
+
+// WithImageQuality sets the image quality.
+func WithImageQuality(quality string) ImageOption {
+	return func(r *ImageRequest) {
+		r.Quality = quality
+	}
+}
+
+// WithImageCount sets the number of images to generate.
+func WithImageCount(n int) ImageOption {
+	return func(r *ImageRequest) {
+		r.N = n
+	}
+}
+
+// GenerateImage creates images from a text prompt.
+// Returns an error if the provider does not support image generation.
+func (c *Client) GenerateImage(ctx context.Context, prompt string, opts ...ImageOption) (*ImageResponse, error) {
+	c.mu.RLock()
+	p := c.provider
+	logger := c.logger
+	c.mu.RUnlock()
+
+	if p == nil {
+		return nil, ErrNoProvider
+	}
+
+	generator, ok := p.(ImageGenerator)
+	if !ok {
+		return nil, fmt.Errorf("allm: provider does not support image generation")
+	}
+
+	if prompt == "" {
+		return nil, ErrEmptyInput
+	}
+
+	req := &ImageRequest{
+		Prompt: prompt,
+		N:      1, // default to 1 image
+	}
+	for _, opt := range opts {
+		opt(req)
+	}
+
+	if logger != nil {
+		logger.Debug("generate image request",
+			"provider", p.Name(),
+			"model", req.Model,
+			"size", req.Size,
+			"n", req.N,
+		)
+	}
+
+	return generator.GenerateImage(ctx, req)
 }
