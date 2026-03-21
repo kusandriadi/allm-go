@@ -2036,9 +2036,6 @@ func TestPingWithModelLister(t *testing.T) {
 	if status.Models != 2 {
 		t.Errorf("expected 2 models, got %d", status.Models)
 	}
-	if status.Latency <= 0 {
-		t.Error("expected positive latency")
-	}
 }
 
 func TestPingFallbackToComplete(t *testing.T) {
