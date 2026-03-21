@@ -19,6 +19,9 @@ const (
 	MaxStopSequences = 16
 	// MaxMaxTokens is the upper bound for max_tokens to prevent misuse.
 	MaxMaxTokens = 1_000_000
+	// MaxImageSize is the maximum allowed size for a single image (20MB).
+	// This prevents OOM from oversized images before the total maxInputLen check.
+	MaxImageSize = 20 * 1024 * 1024
 )
 
 // Temperature and penalty bounds (OpenAI standard).
@@ -105,7 +108,7 @@ func validateRequest(req *Request) error {
 		}
 	}
 
-	// Validate image MIME types
+	// Validate image MIME types and sizes
 	for _, msg := range req.Messages {
 		for j, img := range msg.Images {
 			if img.MimeType == "" {
@@ -116,6 +119,9 @@ func validateRequest(req *Request) error {
 			}
 			if len(img.Data) == 0 {
 				return fmt.Errorf("image %d has empty data", j)
+			}
+			if len(img.Data) > MaxImageSize {
+				return fmt.Errorf("image %d exceeds maximum size of %d bytes (%d bytes)", j, MaxImageSize, len(img.Data))
 			}
 		}
 	}

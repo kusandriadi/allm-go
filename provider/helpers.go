@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,7 +19,9 @@ import (
 )
 
 // validateBaseURLProvider checks if a base URL is safe from SSRF attacks.
-// It validates URLs for provider constructors.
+// Uses net.ParseIP for robust IP validation (handles hex, octal, IPv6-mapped IPv4, etc).
+// Note: DNS rebinding (domain resolving to internal IP) is not covered here;
+// for production use with untrusted input, use a custom HTTP transport with IP validation.
 func validateBaseURLProvider(baseURL string, allowLocal bool) error {
 	if baseURL == "" {
 		return fmt.Errorf("base URL cannot be empty")
@@ -34,6 +37,11 @@ func validateBaseURLProvider(baseURL string, allowLocal bool) error {
 		return fmt.Errorf("base URL must use http or https scheme, got: %s", u.Scheme)
 	}
 
+	// Reject userinfo in URL (e.g., http://evil@127.0.0.1/)
+	if u.User != nil {
+		return fmt.Errorf("base URL must not contain userinfo")
+	}
+
 	// Extract hostname for validation
 	hostname := u.Hostname()
 	if hostname == "" {
@@ -41,53 +49,38 @@ func validateBaseURLProvider(baseURL string, allowLocal bool) error {
 	}
 
 	if !allowLocal {
-		// Block localhost and loopback addresses for cloud providers
-		if isLocalhostProvider(hostname) {
-			return fmt.Errorf("base URL cannot point to localhost (use Local provider for local servers)")
-		}
-
-		// Block private IP ranges for cloud providers
-		if isPrivateIPProvider(hostname) {
-			return fmt.Errorf("base URL cannot point to private IP address")
+		if isLocalOrPrivate(hostname) {
+			return fmt.Errorf("base URL cannot point to localhost or private network (use Local provider for local servers)")
 		}
 	}
 
 	return nil
 }
 
-// isLocalhostProvider checks if a hostname is localhost or loopback.
-func isLocalhostProvider(hostname string) bool {
+// isLocalOrPrivate returns true if the hostname resolves to a loopback, private,
+// link-local, or unspecified address. Uses net.ParseIP for robust handling of all
+// IP representations (hex, octal, decimal, IPv6-mapped IPv4, bracketed, etc).
+func isLocalOrPrivate(hostname string) bool {
 	hostname = strings.ToLower(hostname)
-	return hostname == "localhost" ||
-		hostname == "127.0.0.1" ||
-		hostname == "::1" ||
-		strings.HasPrefix(hostname, "127.") ||
-		hostname == "0.0.0.0" ||
-		hostname == "::"
-}
 
-// isPrivateIPProvider checks if a hostname appears to be a private IP address.
-func isPrivateIPProvider(hostname string) bool {
-	// Common private IP prefixes (RFC 1918)
-	privateRanges := []string{
-		"10.", // 10.0.0.0/8
-		"172.16.", "172.17.", "172.18.", "172.19.",
-		"172.20.", "172.21.", "172.22.", "172.23.",
-		"172.24.", "172.25.", "172.26.", "172.27.",
-		"172.28.", "172.29.", "172.30.", "172.31.", // 172.16.0.0/12
-		"192.168.",       // 192.168.0.0/16
-		"169.254.",       // Link-local
-		"fc00:", "fd00:", // IPv6 unique local
-		"fe80:", // IPv6 link-local
+	// Check well-known hostnames
+	if hostname == "localhost" {
+		return true
 	}
 
-	hostname = strings.ToLower(hostname)
-	for _, prefix := range privateRanges {
-		if strings.HasPrefix(hostname, prefix) {
-			return true
-		}
+	// Parse as IP address (handles all formats: dotted, hex, octal, IPv6, etc)
+	ip := net.ParseIP(hostname)
+	if ip == nil {
+		// Not an IP — could be a domain name. We can't block DNS rebinding here,
+		// but we block known dangerous hostnames.
+		return false
 	}
-	return false
+
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified()
 }
 
 // wrapOpenAIError wraps OpenAI-compatible API errors with allm sentinel errors.
@@ -104,7 +97,7 @@ func wrapOpenAIError(err error) error {
 }
 
 // convertToOpenAI converts allm messages to OpenAI SDK format with image support.
-// Shared by all OpenAI-compatible providers (OpenAI, DeepSeek, Gemini, Groq, GLM, etc).
+// Shared by all OpenAI-compatible providers (OpenAI, DeepSeek, Gemini, GLM, etc).
 func convertToOpenAI(msgs []allm.Message) []openai.ChatCompletionMessageParamUnion {
 	var messages []openai.ChatCompletionMessageParamUnion
 

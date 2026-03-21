@@ -29,10 +29,6 @@ func TestValidateKeyFormat(t *testing.T) {
 		{"bad openai prefix", allm.OpenAI, "bad-" + strings.Repeat("x", 40), true},
 		{"short openai", allm.OpenAI, "sk-short", true},
 
-		// Groq
-		{"valid groq", allm.Groq, "gsk_" + strings.Repeat("x", 40), false},
-		{"bad groq prefix", allm.Groq, "sk-" + strings.Repeat("x", 40), true},
-
 		// DeepSeek
 		{"valid deepseek", allm.DeepSeek, strings.Repeat("x", 30), false},
 		{"short deepseek", allm.DeepSeek, "short", true},
@@ -57,9 +53,6 @@ func TestValidateKeyFormat(t *testing.T) {
 		{"valid glm", allm.GLM, strings.Repeat("x", 20), false},
 		{"short glm", allm.GLM, "tiny", true},
 
-		// Perplexity
-		{"valid perplexity", allm.Perplexity, strings.Repeat("x", 20), false},
-		{"short perplexity", allm.Perplexity, "tiny", true},
 	}
 
 	for _, tt := range tests {
@@ -81,7 +74,6 @@ func TestDetectKeyInString(t *testing.T) {
 		{"no key", "hello world", 0},
 		{"anthropic key", "sk-ant-api03-" + strings.Repeat("a", 80), 1},
 		{"openai key", "sk-proj-" + strings.Repeat("b", 80), 1},
-		{"groq key", "gsk_" + strings.Repeat("c", 40), 1},
 		{"short string", "sk-ant-short", 0},
 		{"jwt token", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", 1},
 	}
@@ -115,11 +107,6 @@ func TestScanSource(t *testing.T) {
 		{
 			"hardcoded openai key",
 			`client := openai.New("sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")`,
-			1,
-		},
-		{
-			"hardcoded groq key",
-			`p := provider.Groq("gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")`,
 			1,
 		},
 		{

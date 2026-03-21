@@ -14,22 +14,10 @@ func Gemini(apiKey string, opts ...CompatOption) *OpenAICompatibleProvider {
 	return OpenAICompatible(allm.Gemini, apiKey, opts...)
 }
 
-// Groq creates a new Groq provider.
-// If apiKey is empty, it reads from GROQ_API_KEY environment variable.
-func Groq(apiKey string, opts ...CompatOption) *OpenAICompatibleProvider {
-	return OpenAICompatible(allm.Groq, apiKey, opts...)
-}
-
 // GLM creates a new Zhipu AI GLM provider.
 // If apiKey is empty, it reads from GLM_API_KEY environment variable.
 func GLM(apiKey string, opts ...CompatOption) *OpenAICompatibleProvider {
 	return OpenAICompatible(allm.GLM, apiKey, opts...)
-}
-
-// Perplexity creates a new Perplexity provider.
-// If apiKey is empty, it reads from PERPLEXITY_API_KEY environment variable.
-func Perplexity(apiKey string, opts ...CompatOption) *OpenAICompatibleProvider {
-	return OpenAICompatible(allm.Perplexity, apiKey, opts...)
 }
 
 // Kimi creates a new Moonshot AI Kimi provider.

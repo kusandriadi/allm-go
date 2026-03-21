@@ -30,9 +30,6 @@ var knownKeyPatterns = []KeyPattern{
 	// DeepSeek
 	{Provider: allm.DeepSeek, Prefix: "sk-", MinLen: 30},
 
-	// Groq
-	{Provider: allm.Groq, Prefix: "gsk_", MinLen: 30},
-
 	// Moonshot / Kimi
 	{Provider: allm.Kimi, Prefix: "sk-", MinLen: 30},
 
@@ -48,9 +45,6 @@ var sourcePatterns = []*regexp.Regexp{
 	// OpenAI keys
 	regexp.MustCompile(`["']sk-proj-[A-Za-z0-9_-]{20,}["']`),
 	regexp.MustCompile(`["']sk-svcacct-[A-Za-z0-9_-]{20,}["']`),
-
-	// Groq keys
-	regexp.MustCompile(`["']gsk_[A-Za-z0-9_-]{20,}["']`),
 
 	// Generic long API keys in quotes (likely hardcoded)
 	regexp.MustCompile(`["']sk-[A-Za-z0-9_-]{40,}["']`),
@@ -109,17 +103,12 @@ func ValidateKeyFormat(provider allm.ProviderName, key string) error {
 			return fmt.Errorf("openai key looks too short (got %d chars)", len(key))
 		}
 
-	case allm.Groq:
-		if !strings.HasPrefix(key, "gsk_") {
-			return fmt.Errorf("groq key should start with 'gsk_'")
-		}
-
 	case allm.DeepSeek, allm.Kimi:
 		if len(key) < 20 {
 			return fmt.Errorf("%s key looks too short (got %d chars)", provider, len(key))
 		}
 
-	case allm.Gemini, allm.GLM, allm.Qwen, allm.MiniMax, allm.Perplexity:
+	case allm.Gemini, allm.GLM, allm.Qwen, allm.MiniMax:
 		if len(key) < 10 {
 			return fmt.Errorf("%s key looks too short (got %d chars)", provider, len(key))
 		}

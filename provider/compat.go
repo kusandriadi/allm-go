@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/kusandriadi/allm-go"
@@ -38,25 +37,12 @@ var knownProviders = map[allm.ProviderName]providerRegistry{
 		embedSupport:  false,
 		visionSupport: true,
 	},
-	allm.Groq: {
-		baseURL:       "https://api.groq.com/openai/v1",
-		defaultModel:  "llama-3.3-70b-versatile",
-		envKey:        "GROQ_API_KEY",
-		embedSupport:  false,
-		visionSupport: true,
-	},
 	allm.GLM: {
 		baseURL:       "https://open.bigmodel.cn/api/paas/v4/",
 		defaultModel:  "glm-4-flash",
 		envKey:        "GLM_API_KEY",
 		embedSupport:  true,
 		visionSupport: true,
-	},
-	allm.Perplexity: {
-		baseURL:      "https://api.perplexity.ai",
-		defaultModel: "llama-3.1-sonar-small-128k-online",
-		envKey:       "PERPLEXITY_API_KEY",
-		embedSupport: false,
 	},
 	allm.Kimi: {
 		baseURL:       "https://api.moonshot.cn/v1",
@@ -271,8 +257,7 @@ func (p *OpenAICompatibleProvider) Embed(ctx context.Context, req *allm.EmbedReq
 // buildClient creates the OpenAI SDK client with appropriate options.
 func (p *OpenAICompatibleProvider) buildClient() openai.Client {
 	// Validate base URL for security (allow local URLs for Local provider)
-	// Only validate if baseURL looks like a URL (contains scheme or starts with http)
-	if p.baseURL != "" && (strings.Contains(p.baseURL, "://") || strings.HasPrefix(p.baseURL, "http")) {
+	if p.baseURL != "" {
 		allowLocal := (p.name == allm.Local)
 		if err := validateBaseURLProvider(p.baseURL, allowLocal); err != nil {
 			panic(fmt.Sprintf("%s: %v", p.name, err))

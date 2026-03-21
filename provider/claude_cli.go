@@ -49,6 +49,9 @@ func WithCLIEffort(effort string) CLIOption {
 }
 
 // ClaudeCLI creates a new Claude CLI provider.
+// Panics if cliPath contains path separators (to prevent path traversal)
+// or suspicious characters. Use a simple binary name (resolved via PATH)
+// or an absolute path to a trusted binary.
 func ClaudeCLI(opts ...CLIOption) *ClaudeCLIProvider {
 	p := &ClaudeCLIProvider{
 		model:   "claude-sonnet-4-20250514",
@@ -57,7 +60,32 @@ func ClaudeCLI(opts ...CLIOption) *ClaudeCLIProvider {
 	for _, opt := range opts {
 		opt(p)
 	}
+	validateCLIPath(p.cliPath)
 	return p
+}
+
+// validateCLIPath ensures the CLI path is safe from injection attacks.
+// Allows either a simple binary name (e.g. "claude") or an absolute path
+// (e.g. "/usr/bin/claude"). Rejects relative paths, path traversal, and
+// suspicious characters that could enable command injection.
+func validateCLIPath(path string) {
+	if path == "" {
+		panic("claude-cli: cliPath cannot be empty")
+	}
+
+	// Reject path traversal
+	if strings.Contains(path, "..") {
+		panic("claude-cli: cliPath must not contain '..'")
+	}
+
+	// Reject shell metacharacters that could enable injection
+	// (even though exec.Command doesn't use a shell, defense in depth)
+	for _, c := range path {
+		switch c {
+		case ';', '&', '|', '`', '$', '(', ')', '{', '}', '<', '>', '\n', '\r', '\t', '\'', '"', '\\', ' ':
+			panic(fmt.Sprintf("claude-cli: cliPath contains invalid character: %q", c))
+		}
+	}
 }
 
 // Name returns the provider name.

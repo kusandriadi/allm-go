@@ -13,12 +13,8 @@ const (
 	DeepSeek ProviderName = "deepseek"
 	// Gemini is the name for Google Gemini models.
 	Gemini ProviderName = "gemini"
-	// Groq is the name for Groq models.
-	Groq ProviderName = "groq"
 	// GLM is the name for Zhipu AI GLM models.
 	GLM ProviderName = "glm"
-	// Perplexity is the name for Perplexity models.
-	Perplexity ProviderName = "perplexity"
 	// Kimi is the name for Moonshot AI Kimi models.
 	Kimi ProviderName = "kimi"
 	// Qwen is the name for Alibaba Qwen models (via DashScope).

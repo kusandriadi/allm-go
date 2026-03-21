@@ -6,451 +6,155 @@ import (
 	"github.com/kusandriadi/allm-go"
 )
 
-// --- DeepSeek (new implementation) ---
+// providerTestCase defines expected defaults for a registered provider shortcut.
+type providerTestCase struct {
+	name       string
+	create     func(string, ...CompatOption) *OpenAICompatibleProvider
+	wantName   string
+	wantModel  string
+	wantURL    string
+	envKey     string
+	embedModel string // non-empty if provider supports embeddings
+}
 
-func TestDeepSeekCompat(t *testing.T) {
-	p := DeepSeek("")
-	if p.Name() != "deepseek" {
-		t.Errorf("expected 'deepseek', got %q", p.Name())
-	}
-	if p.model != "deepseek-chat" {
-		t.Errorf("expected default model, got %q", p.model)
-	}
-	if p.maxTokens != 4096 {
-		t.Errorf("expected 4096, got %d", p.maxTokens)
-	}
-	if p.baseURL != "https://api.deepseek.com/v1" {
-		t.Errorf("expected DeepSeek base URL, got %q", p.baseURL)
+// registeredProviders lists all OpenAI-compatible provider shortcuts with expected defaults.
+var registeredProviders = []providerTestCase{
+	{
+		name: "DeepSeek", create: DeepSeek,
+		wantName: "deepseek", wantModel: "deepseek-chat",
+		wantURL: "https://api.deepseek.com/v1", envKey: "DEEPSEEK_API_KEY",
+	},
+	{
+		name: "GLM", create: GLM,
+		wantName: "glm", wantModel: "glm-4-flash",
+		wantURL: "https://open.bigmodel.cn/api/paas/v4/", envKey: "GLM_API_KEY",
+		embedModel: "embedding-3",
+	},
+	{
+		name: "Gemini", create: Gemini,
+		wantName: "gemini", wantModel: "gemini-2.0-flash",
+		wantURL: "https://generativelanguage.googleapis.com/v1beta/openai/", envKey: "GEMINI_API_KEY",
+	},
+	{
+		name: "Kimi", create: Kimi,
+		wantName: "kimi", wantModel: "moonshot-v1-8k",
+		wantURL: "https://api.moonshot.cn/v1", envKey: "MOONSHOT_API_KEY",
+	},
+	{
+		name: "Qwen", create: Qwen,
+		wantName: "qwen", wantModel: "qwen-plus",
+		wantURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", envKey: "DASHSCOPE_API_KEY",
+		embedModel: "text-embedding-v3",
+	},
+	{
+		name: "MiniMax", create: MiniMax,
+		wantName: "minimax", wantModel: "MiniMax-Text-01",
+		wantURL: "https://api.minimax.chat/v1", envKey: "MINIMAX_API_KEY",
+	},
+}
+
+// TestProviderDefaults verifies each shortcut returns correct name, model, URL, and maxTokens.
+func TestProviderDefaults(t *testing.T) {
+	for _, tc := range registeredProviders {
+		t.Run(tc.name, func(t *testing.T) {
+			p := tc.create("")
+			if p.Name() != tc.wantName {
+				t.Errorf("Name() = %q, want %q", p.Name(), tc.wantName)
+			}
+			if p.model != tc.wantModel {
+				t.Errorf("model = %q, want %q", p.model, tc.wantModel)
+			}
+			if p.baseURL != tc.wantURL {
+				t.Errorf("baseURL = %q, want %q", p.baseURL, tc.wantURL)
+			}
+			if p.maxTokens != 4096 {
+				t.Errorf("maxTokens = %d, want 4096", p.maxTokens)
+			}
+			if tc.embedModel != "" && p.embedModel != tc.embedModel {
+				t.Errorf("embedModel = %q, want %q", p.embedModel, tc.embedModel)
+			}
+		})
 	}
 }
 
-func TestDeepSeekCompatWithOptions(t *testing.T) {
-	p := DeepSeek("test-key",
-		WithDefaultModel("deepseek-coder"),
-		WithMaxTokens(8192),
-		WithTemperature(0.3),
-	)
-
-	if p.apiKey != "test-key" {
-		t.Error("API key not set")
-	}
-	if p.model != "deepseek-coder" {
-		t.Error("model not set")
-	}
-	if p.maxTokens != 8192 {
-		t.Error("maxTokens not set")
-	}
-	if p.temperature != 0.3 {
-		t.Error("temperature not set")
-	}
-}
-
-func TestDeepSeekCompatAvailable(t *testing.T) {
-	p1 := DeepSeek("")
-	if p1.Available() {
-		t.Error("should not be available without key")
-	}
-
-	p2 := DeepSeek("test-key")
-	if !p2.Available() {
-		t.Error("should be available with key")
+// TestProviderWithOptions verifies custom options override defaults.
+func TestProviderWithOptions(t *testing.T) {
+	for _, tc := range registeredProviders {
+		t.Run(tc.name, func(t *testing.T) {
+			p := tc.create("test-key",
+				WithDefaultModel("custom-model"),
+				WithMaxTokens(8192),
+				WithTemperature(0.5),
+			)
+			if p.apiKey != "test-key" {
+				t.Error("apiKey not set")
+			}
+			if p.model != "custom-model" {
+				t.Error("model override not applied")
+			}
+			if p.maxTokens != 8192 {
+				t.Error("maxTokens override not applied")
+			}
+			if p.temperature != 0.5 {
+				t.Error("temperature override not applied")
+			}
+		})
 	}
 }
 
-func TestDeepSeekCompatEnvKey(t *testing.T) {
-	t.Setenv("DEEPSEEK_API_KEY", "env-key")
-	p := DeepSeek("")
-	if p.apiKey != "env-key" {
-		t.Errorf("expected env key, got %q", p.apiKey)
+// TestProviderAvailable verifies availability checks (key required for non-local).
+func TestProviderAvailable(t *testing.T) {
+	for _, tc := range registeredProviders {
+		t.Run(tc.name+"_without_key", func(t *testing.T) {
+			if tc.create("").Available() {
+				t.Error("should not be available without key")
+			}
+		})
+		t.Run(tc.name+"_with_key", func(t *testing.T) {
+			if !tc.create("test-key").Available() {
+				t.Error("should be available with key")
+			}
+		})
 	}
 }
 
-// --- GLM (new implementation) ---
-
-func TestGLMCompat(t *testing.T) {
-	p := GLM("")
-	if p.Name() != "glm" {
-		t.Errorf("expected 'glm', got %q", p.Name())
-	}
-	if p.model != "glm-4-flash" {
-		t.Errorf("expected default model, got %q", p.model)
-	}
-	if p.maxTokens != 4096 {
-		t.Errorf("expected 4096, got %d", p.maxTokens)
-	}
-	if p.baseURL != "https://open.bigmodel.cn/api/paas/v4/" {
-		t.Errorf("expected GLM base URL, got %q", p.baseURL)
-	}
-	if p.embedModel != "embedding-3" {
-		t.Errorf("expected default embedding model, got %q", p.embedModel)
+// TestProviderEnvKey verifies each shortcut reads from the correct environment variable.
+func TestProviderEnvKey(t *testing.T) {
+	for _, tc := range registeredProviders {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(tc.envKey, "env-key")
+			p := tc.create("")
+			if p.apiKey != "env-key" {
+				t.Errorf("apiKey = %q, want env-key (from %s)", p.apiKey, tc.envKey)
+			}
+		})
 	}
 }
 
-func TestGLMCompatWithOptions(t *testing.T) {
-	p := GLM("test-key",
-		WithDefaultModel("glm-4"),
-		WithMaxTokens(8192),
-		WithTemperature(0.5),
-	)
+// --- Local / Ollama / vLLM ---
 
-	if p.apiKey != "test-key" {
-		t.Error("API key not set")
-	}
-	if p.model != "glm-4" {
-		t.Error("model not set")
-	}
-	if p.maxTokens != 8192 {
-		t.Error("maxTokens not set")
-	}
-	if p.temperature != 0.5 {
-		t.Error("temperature not set")
-	}
-}
-
-func TestGLMCompatAvailable(t *testing.T) {
-	p1 := GLM("")
-	if p1.Available() {
-		t.Error("should not be available without key")
-	}
-
-	p2 := GLM("test-key")
-	if !p2.Available() {
-		t.Error("should be available with key")
-	}
-}
-
-func TestGLMCompatEnvKey(t *testing.T) {
-	t.Setenv("GLM_API_KEY", "env-key")
-	p := GLM("")
-	if p.apiKey != "env-key" {
-		t.Errorf("expected env key, got %q", p.apiKey)
-	}
-}
-
-// --- Gemini ---
-
-func TestGemini(t *testing.T) {
-	p := Gemini("")
-	if p.Name() != "gemini" {
-		t.Errorf("expected 'gemini', got %q", p.Name())
-	}
-	if p.model != "gemini-2.0-flash" {
-		t.Errorf("expected default model, got %q", p.model)
-	}
-	if p.baseURL != "https://generativelanguage.googleapis.com/v1beta/openai/" {
-		t.Errorf("expected Gemini base URL, got %q", p.baseURL)
-	}
-}
-
-func TestGeminiWithOptions(t *testing.T) {
-	p := Gemini("test-key",
-		WithDefaultModel("gemini-1.5-pro"),
-		WithMaxTokens(2048),
-		WithTemperature(0.9),
-	)
-
-	if p.apiKey != "test-key" {
-		t.Error("API key not set")
-	}
-	if p.model != "gemini-1.5-pro" {
-		t.Error("model not set")
-	}
-	if p.maxTokens != 2048 {
-		t.Error("maxTokens not set")
-	}
-	if p.temperature != 0.9 {
-		t.Error("temperature not set")
-	}
-}
-
-func TestGeminiAvailable(t *testing.T) {
-	p1 := Gemini("")
-	if p1.Available() {
-		t.Error("should not be available without key")
-	}
-
-	p2 := Gemini("test-key")
-	if !p2.Available() {
-		t.Error("should be available with key")
-	}
-}
-
-func TestGeminiEnvKey(t *testing.T) {
-	t.Setenv("GEMINI_API_KEY", "env-key")
-	p := Gemini("")
-	if p.apiKey != "env-key" {
-		t.Errorf("expected env key, got %q", p.apiKey)
-	}
-}
-
-// --- Groq ---
-
-func TestGroq(t *testing.T) {
-	p := Groq("")
-	if p.Name() != "groq" {
-		t.Errorf("expected 'groq', got %q", p.Name())
-	}
-	if p.model != "llama-3.3-70b-versatile" {
-		t.Errorf("expected default model, got %q", p.model)
-	}
-	if p.baseURL != "https://api.groq.com/openai/v1" {
-		t.Errorf("expected Groq base URL, got %q", p.baseURL)
-	}
-}
-
-func TestGroqWithOptions(t *testing.T) {
-	p := Groq("test-key",
-		WithDefaultModel("mixtral-8x7b-32768"),
-		WithTemperature(0.2),
-	)
-
-	if p.apiKey != "test-key" {
-		t.Error("API key not set")
-	}
-	if p.model != "mixtral-8x7b-32768" {
-		t.Error("model not set")
-	}
-	if p.temperature != 0.2 {
-		t.Error("temperature not set")
-	}
-}
-
-func TestGroqAvailable(t *testing.T) {
-	p1 := Groq("")
-	if p1.Available() {
-		t.Error("should not be available without key")
-	}
-
-	p2 := Groq("test-key")
-	if !p2.Available() {
-		t.Error("should be available with key")
-	}
-}
-
-func TestGroqEnvKey(t *testing.T) {
-	t.Setenv("GROQ_API_KEY", "env-key")
-	p := Groq("")
-	if p.apiKey != "env-key" {
-		t.Errorf("expected env key, got %q", p.apiKey)
-	}
-}
-
-// --- Perplexity ---
-
-func TestPerplexity(t *testing.T) {
-	p := Perplexity("")
-	if p.Name() != "perplexity" {
-		t.Errorf("expected 'perplexity', got %q", p.Name())
-	}
-	if p.model != "llama-3.1-sonar-small-128k-online" {
-		t.Errorf("expected default model, got %q", p.model)
-	}
-	if p.baseURL != "https://api.perplexity.ai" {
-		t.Errorf("expected Perplexity base URL, got %q", p.baseURL)
-	}
-}
-
-func TestPerplexityWithOptions(t *testing.T) {
-	p := Perplexity("test-key",
-		WithDefaultModel("llama-3.1-sonar-large-128k-online"),
-		WithMaxTokens(1024),
-	)
-
-	if p.apiKey != "test-key" {
-		t.Error("API key not set")
-	}
-	if p.model != "llama-3.1-sonar-large-128k-online" {
-		t.Error("model not set")
-	}
-	if p.maxTokens != 1024 {
-		t.Error("maxTokens not set")
-	}
-}
-
-func TestPerplexityAvailable(t *testing.T) {
-	p1 := Perplexity("")
-	if p1.Available() {
-		t.Error("should not be available without key")
-	}
-
-	p2 := Perplexity("test-key")
-	if !p2.Available() {
-		t.Error("should be available with key")
-	}
-}
-
-func TestPerplexityEnvKey(t *testing.T) {
-	t.Setenv("PERPLEXITY_API_KEY", "env-key")
-	p := Perplexity("")
-	if p.apiKey != "env-key" {
-		t.Errorf("expected env key, got %q", p.apiKey)
-	}
-}
-
-// --- Kimi ---
-
-func TestKimi(t *testing.T) {
-	p := Kimi("")
-	if p.Name() != "kimi" {
-		t.Errorf("expected 'kimi', got %q", p.Name())
-	}
-	if p.model != "moonshot-v1-8k" {
-		t.Errorf("expected default model, got %q", p.model)
-	}
-	if p.baseURL != "https://api.moonshot.cn/v1" {
-		t.Errorf("expected Kimi base URL, got %q", p.baseURL)
-	}
-}
-
-func TestKimiWithOptions(t *testing.T) {
-	p := Kimi("test-key", WithDefaultModel("moonshot-v1-128k"))
-	if p.apiKey != "test-key" {
-		t.Errorf("expected test-key, got %q", p.apiKey)
-	}
-	if p.model != "moonshot-v1-128k" {
-		t.Errorf("expected moonshot-v1-128k, got %q", p.model)
-	}
-}
-
-func TestKimiAvailable(t *testing.T) {
-	p := Kimi("key")
-	if !p.Available() {
-		t.Error("expected available with key")
-	}
-	p2 := Kimi("")
-	if p2.Available() {
-		t.Error("expected not available without key")
-	}
-}
-
-func TestKimiEnvKey(t *testing.T) {
-	t.Setenv("MOONSHOT_API_KEY", "env-key")
-	p := Kimi("")
-	if p.apiKey != "env-key" {
-		t.Errorf("expected env key, got %q", p.apiKey)
-	}
-}
-
-// --- Qwen ---
-
-func TestQwen(t *testing.T) {
-	p := Qwen("")
-	if p.Name() != "qwen" {
-		t.Errorf("expected 'qwen', got %q", p.Name())
-	}
-	if p.model != "qwen-plus" {
-		t.Errorf("expected default model, got %q", p.model)
-	}
-	if p.baseURL != "https://dashscope.aliyuncs.com/compatible-mode/v1" {
-		t.Errorf("expected Qwen base URL, got %q", p.baseURL)
-	}
-}
-
-func TestQwenWithOptions(t *testing.T) {
-	p := Qwen("test-key", WithDefaultModel("qwen-max"))
-	if p.apiKey != "test-key" {
-		t.Errorf("expected test-key, got %q", p.apiKey)
-	}
-	if p.model != "qwen-max" {
-		t.Errorf("expected qwen-max, got %q", p.model)
-	}
-}
-
-func TestQwenAvailable(t *testing.T) {
-	p := Qwen("key")
-	if !p.Available() {
-		t.Error("expected available with key")
-	}
-	p2 := Qwen("")
-	if p2.Available() {
-		t.Error("expected not available without key")
-	}
-}
-
-func TestQwenEnvKey(t *testing.T) {
-	t.Setenv("DASHSCOPE_API_KEY", "env-key")
-	p := Qwen("")
-	if p.apiKey != "env-key" {
-		t.Errorf("expected env key, got %q", p.apiKey)
-	}
-}
-
-func TestEmbedSupportQwen(t *testing.T) {
-	p := Qwen("key")
-	if p.embedModel != "text-embedding-v3" {
-		t.Errorf("expected text-embedding-v3, got %q", p.embedModel)
-	}
-}
-
-// --- MiniMax ---
-
-func TestMiniMax(t *testing.T) {
-	p := MiniMax("")
-	if p.Name() != "minimax" {
-		t.Errorf("expected 'minimax', got %q", p.Name())
-	}
-	if p.model != "MiniMax-Text-01" {
-		t.Errorf("expected default model, got %q", p.model)
-	}
-	if p.baseURL != "https://api.minimax.chat/v1" {
-		t.Errorf("expected MiniMax base URL, got %q", p.baseURL)
-	}
-}
-
-func TestMiniMaxWithOptions(t *testing.T) {
-	p := MiniMax("test-key", WithDefaultModel("abab6.5s-chat"))
-	if p.apiKey != "test-key" {
-		t.Errorf("expected test-key, got %q", p.apiKey)
-	}
-	if p.model != "abab6.5s-chat" {
-		t.Errorf("expected abab6.5s-chat, got %q", p.model)
-	}
-}
-
-func TestMiniMaxAvailable(t *testing.T) {
-	p := MiniMax("key")
-	if !p.Available() {
-		t.Error("expected available with key")
-	}
-	p2 := MiniMax("")
-	if p2.Available() {
-		t.Error("expected not available without key")
-	}
-}
-
-func TestMiniMaxEnvKey(t *testing.T) {
-	t.Setenv("MINIMAX_API_KEY", "env-key")
-	p := MiniMax("")
-	if p.apiKey != "env-key" {
-		t.Errorf("expected env key, got %q", p.apiKey)
-	}
-}
-
-// --- Local (new implementation) ---
-
-func TestLocalCompat(t *testing.T) {
+func TestLocal(t *testing.T) {
 	p := Local("")
 	if p.Name() != "local" {
-		t.Errorf("expected 'local', got %q", p.Name())
+		t.Errorf("Name() = %q, want local", p.Name())
 	}
 	if p.baseURL != "http://localhost:11434/v1" {
-		t.Errorf("expected default baseURL, got %q", p.baseURL)
+		t.Errorf("baseURL = %q, want default Ollama URL", p.baseURL)
 	}
 	if p.model != "llama3" {
-		t.Errorf("expected default model, got %q", p.model)
+		t.Errorf("model = %q, want llama3", p.model)
 	}
-	if p.maxTokens != 4096 {
-		t.Errorf("expected 4096, got %d", p.maxTokens)
+	if !p.Available() {
+		t.Error("local should be available with default baseURL")
 	}
 }
 
-func TestLocalCompatWithOptions(t *testing.T) {
+func TestLocalWithCustomURL(t *testing.T) {
 	p := Local("http://custom:8000/v1",
 		WithDefaultModel("mistral"),
 		WithMaxTokens(2048),
 		WithTemperature(0.8),
 	)
-
 	if p.baseURL != "http://custom:8000/v1" {
 		t.Error("baseURL not set")
 	}
@@ -460,34 +164,22 @@ func TestLocalCompatWithOptions(t *testing.T) {
 	if p.maxTokens != 2048 {
 		t.Error("maxTokens not set")
 	}
-	if p.temperature != 0.8 {
-		t.Error("temperature not set")
-	}
 }
 
-func TestLocalCompatAvailable(t *testing.T) {
-	p := Local("")
-	if !p.Available() {
-		t.Error("local should be available with default baseURL")
-	}
-}
-
-// --- Ollama (new implementation) ---
-
-func TestOllamaCompat(t *testing.T) {
+func TestOllama(t *testing.T) {
 	p := Ollama("llama3.1")
+	if p.Name() != "local" {
+		t.Errorf("Name() = %q, want local", p.Name())
+	}
 	if p.baseURL != "http://localhost:11434/v1" {
-		t.Error("wrong baseURL for Ollama")
+		t.Errorf("baseURL = %q, want Ollama URL", p.baseURL)
 	}
 	if p.model != "llama3.1" {
-		t.Error("model not set")
-	}
-	if p.Name() != "local" {
-		t.Errorf("expected 'local', got %q", p.Name())
+		t.Errorf("model = %q, want llama3.1", p.model)
 	}
 }
 
-func TestOllamaCompatWithOptions(t *testing.T) {
+func TestOllamaWithOptions(t *testing.T) {
 	p := Ollama("codellama", WithTemperature(0.1))
 	if p.model != "codellama" {
 		t.Error("model not set")
@@ -497,19 +189,17 @@ func TestOllamaCompatWithOptions(t *testing.T) {
 	}
 }
 
-// --- vLLM (new implementation) ---
-
-func TestVLLMCompat(t *testing.T) {
+func TestVLLM(t *testing.T) {
 	p := VLLM("mistral-7b")
 	if p.baseURL != "http://localhost:8000/v1" {
-		t.Error("wrong baseURL for vLLM")
+		t.Errorf("baseURL = %q, want vLLM URL", p.baseURL)
 	}
 	if p.model != "mistral-7b" {
-		t.Error("model not set")
+		t.Errorf("model = %q, want mistral-7b", p.model)
 	}
 }
 
-func TestVLLMCompatWithOptions(t *testing.T) {
+func TestVLLMWithOptions(t *testing.T) {
 	p := VLLM("llama2", WithMaxTokens(1024))
 	if p.model != "llama2" {
 		t.Error("model not set")
@@ -522,18 +212,16 @@ func TestVLLMCompatWithOptions(t *testing.T) {
 // --- OpenAICompatible generic constructor ---
 
 func TestOpenAICompatibleCustomProvider(t *testing.T) {
-	// Create a custom provider not in the registry
 	p := OpenAICompatible("custom", "my-key",
 		WithBaseURL("https://custom.api/v1"),
 		WithDefaultModel("custom-model"),
 		WithMaxTokens(2048),
 	)
-
 	if p.Name() != "custom" {
-		t.Errorf("expected 'custom', got %q", p.Name())
+		t.Errorf("Name() = %q, want custom", p.Name())
 	}
 	if p.apiKey != "my-key" {
-		t.Error("API key not set")
+		t.Error("apiKey not set")
 	}
 	if p.baseURL != "https://custom.api/v1" {
 		t.Error("baseURL not set")
@@ -547,24 +235,20 @@ func TestOpenAICompatibleCustomProvider(t *testing.T) {
 }
 
 func TestOpenAICompatibleRegistryLookup(t *testing.T) {
-	// Test that registry defaults are applied
 	p := OpenAICompatible(allm.DeepSeek, "test-key")
-
 	if p.baseURL != "https://api.deepseek.com/v1" {
-		t.Errorf("expected DeepSeek base URL from registry, got %q", p.baseURL)
+		t.Errorf("expected registry baseURL, got %q", p.baseURL)
 	}
 	if p.model != "deepseek-chat" {
-		t.Errorf("expected default model from registry, got %q", p.model)
+		t.Errorf("expected registry model, got %q", p.model)
 	}
 }
 
 func TestOpenAICompatibleExplicitOverridesRegistry(t *testing.T) {
-	// Test that explicit options override registry defaults
 	p := OpenAICompatible(allm.DeepSeek, "test-key",
 		WithBaseURL("https://custom.api"),
 		WithDefaultModel("custom-model"),
 	)
-
 	if p.baseURL != "https://custom.api" {
 		t.Error("explicit baseURL should override registry")
 	}
@@ -574,42 +258,40 @@ func TestOpenAICompatibleExplicitOverridesRegistry(t *testing.T) {
 }
 
 func TestOpenAICompatibleEnvKeyFallback(t *testing.T) {
-	t.Setenv("GROQ_API_KEY", "env-groq-key")
-	p := OpenAICompatible(allm.Groq, "")
-
-	if p.apiKey != "env-groq-key" {
-		t.Errorf("expected env key, got %q", p.apiKey)
+	t.Setenv("DEEPSEEK_API_KEY", "env-ds-key")
+	p := OpenAICompatible(allm.DeepSeek, "")
+	if p.apiKey != "env-ds-key" {
+		t.Errorf("apiKey = %q, want env-ds-key", p.apiKey)
 	}
 }
 
 func TestOpenAICompatibleExplicitKeyOverridesEnv(t *testing.T) {
-	t.Setenv("GROQ_API_KEY", "env-groq-key")
-	p := OpenAICompatible(allm.Groq, "explicit-key")
-
+	t.Setenv("DEEPSEEK_API_KEY", "env-ds-key")
+	p := OpenAICompatible(allm.DeepSeek, "explicit-key")
 	if p.apiKey != "explicit-key" {
-		t.Errorf("expected explicit key to override env, got %q", p.apiKey)
+		t.Errorf("apiKey = %q, want explicit-key", p.apiKey)
 	}
 }
 
-// --- Embed support tests ---
+// --- Embed support ---
 
 func TestEmbedSupportGLM(t *testing.T) {
 	p := GLM("test-key")
 	if p.embedModel != "embedding-3" {
-		t.Errorf("expected default embedding model for GLM, got %q", p.embedModel)
+		t.Errorf("embedModel = %q, want embedding-3", p.embedModel)
 	}
 }
 
 func TestEmbedSupportLocal(t *testing.T) {
-	p := Local("llama3")
+	p := Ollama("llama3")
 	if p.embedModel != "llama3" {
-		t.Errorf("expected embedding model to match chat model for Local, got %q", p.embedModel)
+		t.Errorf("embedModel = %q, want llama3 (should match chat model)", p.embedModel)
 	}
 }
 
 func TestEmbedSupportCustomModel(t *testing.T) {
 	p := GLM("test-key", WithEmbedModel("custom-embed"))
 	if p.embedModel != "custom-embed" {
-		t.Errorf("expected custom embedding model, got %q", p.embedModel)
+		t.Errorf("embedModel = %q, want custom-embed", p.embedModel)
 	}
 }

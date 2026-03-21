@@ -1748,6 +1748,26 @@ func TestValidateRequestImageMIME(t *testing.T) {
 	}
 }
 
+func TestValidateRequestImageTooLarge(t *testing.T) {
+	// Exactly at limit — should pass
+	req := &Request{
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: "Look",
+			Images:  []Image{{MimeType: "image/jpeg", Data: make([]byte, MaxImageSize)}},
+		}},
+	}
+	if err := validateRequest(req); err != nil {
+		t.Errorf("unexpected error for image at max size: %v", err)
+	}
+
+	// Over limit — should fail
+	req.Messages[0].Images[0].Data = make([]byte, MaxImageSize+1)
+	if err := validateRequest(req); err == nil {
+		t.Error("expected error for oversized image")
+	}
+}
+
 func TestValidateRequestModelNameTooLong(t *testing.T) {
 	req := &Request{
 		Messages: []Message{{Role: RoleUser, Content: "Hi"}},
