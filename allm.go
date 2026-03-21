@@ -50,6 +50,7 @@ var (
 	ErrCanceled      = errors.New("allm: request canceled")
 	ErrProvider      = errors.New("allm: provider error")
 	ErrEmptyResponse = errors.New("allm: empty response from provider")
+	ErrNotSupported  = errors.New("allm: not supported by provider")
 )
 
 // Role constants for messages
@@ -165,11 +166,11 @@ type BatchResult struct {
 
 // Image size constants for image generation.
 const (
-	ImageSize256  = "256x256"
-	ImageSize512  = "512x512"
-	ImageSize1024 = "1024x1024"
-	ImageSize1792 = "1024x1792"
-	ImageSize1536 = "1792x1024"
+	ImageSize256       = "256x256"
+	ImageSize512       = "512x512"
+	ImageSize1024      = "1024x1024"
+	ImageSize1024x1792 = "1024x1792" // Portrait
+	ImageSize1792x1024 = "1792x1024" // Landscape
 )
 
 // ImageRequest represents an image generation request.
@@ -717,6 +718,15 @@ func requestMeta(messages []Message, s clientState) []any {
 	if s.maxRetries > 0 {
 		meta = append(meta, "max_retries", s.maxRetries)
 	}
+	if s.responseFormat != nil {
+		meta = append(meta, "response_format", s.responseFormat.Type)
+	}
+	if s.thinking != nil {
+		meta = append(meta, "thinking_budget", s.thinking.BudgetTokens)
+	}
+	if s.maxContextTokens > 0 {
+		meta = append(meta, "max_context_tokens", s.maxContextTokens)
+	}
 	return meta
 }
 
@@ -768,17 +778,18 @@ func truncateMessages(ctx context.Context, s clientState, messages []Message) ([
 			}
 		}
 
-		// Binary search for the right cutoff point
-		// Start by removing oldest messages until we're under the limit
+		// Remove oldest non-system messages until under the limit
 		for len(otherMsgs) > 1 {
-			// Remove the oldest non-system message
 			otherMsgs = otherMsgs[1:]
-			truncated := append(systemMsgs, otherMsgs...)
+
+			// Build a new slice to avoid mutating systemMsgs
+			truncated := make([]Message, 0, len(systemMsgs)+len(otherMsgs))
+			truncated = append(truncated, systemMsgs...)
+			truncated = append(truncated, otherMsgs...)
 
 			tempReq := buildRequest(truncated, s)
 			count, err := counter.CountTokens(ctx, tempReq)
 			if err != nil {
-				// If counting fails, return what we have
 				return truncated, nil
 			}
 
@@ -787,11 +798,11 @@ func truncateMessages(ctx context.Context, s clientState, messages []Message) ([
 			}
 		}
 
-		// If we still can't fit, return at least one message
-		if len(otherMsgs) > 0 {
-			return append(systemMsgs, otherMsgs...), nil
-		}
-		return systemMsgs, nil
+		// Return at least system + last message
+		result := make([]Message, 0, len(systemMsgs)+len(otherMsgs))
+		result = append(result, systemMsgs...)
+		result = append(result, otherMsgs...)
+		return result, nil
 	}
 
 	return nil, fmt.Errorf("unknown truncation strategy: %s", strategy)
@@ -882,7 +893,18 @@ func (c *Client) Stream(ctx context.Context, messages []Message) <-chan StreamCh
 			return
 		}
 
-		req := buildRequest(messages, s)
+		// Context window management: truncate if needed
+		streamMessages := messages
+		if s.maxContextTokens > 0 {
+			var err error
+			streamMessages, err = truncateMessages(ctx, s, messages)
+			if err != nil {
+				out <- StreamChunk{Error: fmt.Errorf("context truncation: %w", err)}
+				return
+			}
+		}
+
+		req := buildRequest(streamMessages, s)
 
 		// Validate request parameters
 		if err := validateRequest(req); err != nil {
@@ -967,7 +989,7 @@ func (c *Client) Embed(ctx context.Context, input ...string) (*EmbedResponse, er
 
 	embedder, ok := s.provider.(Embedder)
 	if !ok {
-		return nil, fmt.Errorf("allm: provider does not support embeddings")
+		return nil, fmt.Errorf("%w: embeddings", ErrNotSupported)
 	}
 
 	if len(input) == 0 {
@@ -1013,7 +1035,7 @@ func (c *Client) Models(ctx context.Context) ([]Model, error) {
 	}
 	lister, ok := p.(ModelLister)
 	if !ok {
-		return nil, errors.New("allm: provider does not support model listing")
+		return nil, fmt.Errorf("%w: model listing", ErrNotSupported)
 	}
 
 	if logger != nil {
@@ -1066,6 +1088,22 @@ func (c *Client) SetTools(tools ...Tool) {
 	c.mu.Unlock()
 }
 
+// SetResponseFormat updates the response format for structured output.
+// Pass nil to disable structured output.
+func (c *Client) SetResponseFormat(rf *ResponseFormat) {
+	c.mu.Lock()
+	c.responseFormat = rf
+	c.mu.Unlock()
+}
+
+// SetThinking updates the thinking/reasoning configuration.
+// Pass nil to disable extended thinking.
+func (c *Client) SetThinking(thinking *ThinkingConfig) {
+	c.mu.Lock()
+	c.thinking = thinking
+	c.mu.Unlock()
+}
+
 // CountTokens estimates input tokens for the given messages.
 // Returns an error if the provider does not support token counting.
 func (c *Client) CountTokens(ctx context.Context, messages []Message) (*TokenCount, error) {
@@ -1077,7 +1115,7 @@ func (c *Client) CountTokens(ctx context.Context, messages []Message) (*TokenCou
 
 	counter, ok := s.provider.(TokenCounter)
 	if !ok {
-		return nil, fmt.Errorf("allm: provider does not support token counting")
+		return nil, fmt.Errorf("%w: token counting", ErrNotSupported)
 	}
 
 	if err := validateMessages(messages, s.maxInputLen); err != nil {
@@ -1111,7 +1149,11 @@ func (c *Client) CreateBatch(ctx context.Context, requests []BatchRequest) (*Bat
 
 	batcher, ok := p.(BatchProvider)
 	if !ok {
-		return nil, fmt.Errorf("allm: provider does not support batch processing")
+		return nil, fmt.Errorf("%w: batch processing", ErrNotSupported)
+	}
+
+	if err := validateBatchRequests(requests); err != nil {
+		return nil, err
 	}
 
 	if logger != nil {
@@ -1138,7 +1180,11 @@ func (c *Client) GetBatch(ctx context.Context, batchID string) (*Batch, error) {
 
 	batcher, ok := p.(BatchProvider)
 	if !ok {
-		return nil, fmt.Errorf("allm: provider does not support batch processing")
+		return nil, fmt.Errorf("%w: batch processing", ErrNotSupported)
+	}
+
+	if batchID == "" {
+		return nil, ErrEmptyInput
 	}
 
 	if logger != nil {
@@ -1196,11 +1242,7 @@ func (c *Client) GenerateImage(ctx context.Context, prompt string, opts ...Image
 
 	generator, ok := p.(ImageGenerator)
 	if !ok {
-		return nil, fmt.Errorf("allm: provider does not support image generation")
-	}
-
-	if prompt == "" {
-		return nil, ErrEmptyInput
+		return nil, fmt.Errorf("%w: image generation", ErrNotSupported)
 	}
 
 	req := &ImageRequest{
@@ -1209,6 +1251,10 @@ func (c *Client) GenerateImage(ctx context.Context, prompt string, opts ...Image
 	}
 	for _, opt := range opts {
 		opt(req)
+	}
+
+	if err := validateImageRequest(req); err != nil {
+		return nil, err
 	}
 
 	if logger != nil {

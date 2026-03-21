@@ -205,8 +205,8 @@ func TestCountTokensNotSupported(t *testing.T) {
 	if err == nil {
 		t.Error("CountTokens should return error for unsupported provider")
 	}
-	if !errors.Is(err, errors.New("allm: provider does not support token counting")) && err.Error() != "allm: provider does not support token counting" {
-		t.Errorf("unexpected error: %v", err)
+	if !errors.Is(err, ErrNotSupported) {
+		t.Errorf("expected ErrNotSupported, got: %v", err)
 	}
 }
 
@@ -215,9 +215,12 @@ func TestCreateBatchNotSupported(t *testing.T) {
 	provider := &mockProvider{}
 	client := New(provider)
 
-	_, err := client.CreateBatch(context.Background(), []BatchRequest{})
+	_, err := client.CreateBatch(context.Background(), []BatchRequest{{CustomID: "1", Messages: []Message{{Role: RoleUser, Content: "hi"}}}})
 	if err == nil {
 		t.Error("CreateBatch should return error for unsupported provider")
+	}
+	if !errors.Is(err, ErrNotSupported) {
+		t.Errorf("expected ErrNotSupported, got: %v", err)
 	}
 }
 
@@ -230,6 +233,9 @@ func TestGetBatchNotSupported(t *testing.T) {
 	if err == nil {
 		t.Error("GetBatch should return error for unsupported provider")
 	}
+	if !errors.Is(err, ErrNotSupported) {
+		t.Errorf("expected ErrNotSupported, got: %v", err)
+	}
 }
 
 // TestGenerateImageNotSupported tests GenerateImage with unsupported provider
@@ -241,6 +247,9 @@ func TestGenerateImageNotSupported(t *testing.T) {
 	if err == nil {
 		t.Error("GenerateImage should return error for unsupported provider")
 	}
+	if !errors.Is(err, ErrNotSupported) {
+		t.Errorf("expected ErrNotSupported, got: %v", err)
+	}
 }
 
 // TestGenerateImageEmptyPrompt tests GenerateImage with empty prompt
@@ -251,6 +260,46 @@ func TestGenerateImageEmptyPrompt(t *testing.T) {
 	_, err := client.GenerateImage(context.Background(), "")
 	if !errors.Is(err, ErrEmptyInput) {
 		t.Errorf("expected ErrEmptyInput, got %v", err)
+	}
+}
+
+// TestGenerateImageValidation tests ImageRequest validation
+func TestGenerateImageValidation(t *testing.T) {
+	provider := &mockImageGenerator{}
+	client := New(provider)
+
+	// Excessive count
+	_, err := client.GenerateImage(context.Background(), "test", WithImageCount(100))
+	if err == nil {
+		t.Error("expected error for excessive image count")
+	}
+}
+
+// TestBatchValidation tests BatchRequest validation
+func TestBatchValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		reqs    []BatchRequest
+		wantErr bool
+	}{
+		{"empty batch", []BatchRequest{}, true},
+		{"empty custom_id", []BatchRequest{{Messages: []Message{{Role: RoleUser, Content: "hi"}}}}, true},
+		{"duplicate custom_id", []BatchRequest{
+			{CustomID: "a", Messages: []Message{{Role: RoleUser, Content: "hi"}}},
+			{CustomID: "a", Messages: []Message{{Role: RoleUser, Content: "hello"}}},
+		}, true},
+		{"valid batch", []BatchRequest{
+			{CustomID: "a", Messages: []Message{{Role: RoleUser, Content: "hi"}}},
+		}, false}, // will fail with ErrNotSupported, but validation passes
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateBatchRequests(tt.reqs)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateBatchRequests() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -344,6 +393,49 @@ func TestResponseThinking(t *testing.T) {
 	}
 	if resp.ThinkingTokens != 200 {
 		t.Errorf("ThinkingTokens = %d, want 200", resp.ThinkingTokens)
+	}
+}
+
+// TestSetResponseFormat tests runtime setter
+func TestSetResponseFormat(t *testing.T) {
+	client := New(nil)
+	format := &ResponseFormat{Type: ResponseFormatJSON}
+	client.SetResponseFormat(format)
+
+	s := client.snapshot()
+	if s.responseFormat != format {
+		t.Error("SetResponseFormat did not set responseFormat")
+	}
+
+	client.SetResponseFormat(nil)
+	s = client.snapshot()
+	if s.responseFormat != nil {
+		t.Error("SetResponseFormat(nil) should clear responseFormat")
+	}
+}
+
+// TestSetThinking tests runtime setter
+func TestSetThinking(t *testing.T) {
+	client := New(nil)
+	cfg := &ThinkingConfig{Type: "enabled", BudgetTokens: 5000}
+	client.SetThinking(cfg)
+
+	s := client.snapshot()
+	if s.thinking != cfg {
+		t.Error("SetThinking did not set thinking")
+	}
+
+	client.SetThinking(nil)
+	s = client.snapshot()
+	if s.thinking != nil {
+		t.Error("SetThinking(nil) should clear thinking")
+	}
+}
+
+// TestErrNotSupported tests sentinel error
+func TestErrNotSupported(t *testing.T) {
+	if !errors.Is(ErrNotSupported, ErrNotSupported) {
+		t.Error("ErrNotSupported should match itself")
 	}
 }
 

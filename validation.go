@@ -22,6 +22,14 @@ const (
 	// MaxImageSize is the maximum allowed size for a single image (20MB).
 	// This prevents OOM from oversized images before the total maxInputLen check.
 	MaxImageSize = 20 * 1024 * 1024
+	// MaxImageGenPromptLength is the maximum length for image generation prompts.
+	MaxImageGenPromptLength = 32_000
+	// MaxImageGenCount is the maximum number of images per generation request.
+	MaxImageGenCount = 10
+	// MaxBatchSize is the maximum number of requests in a batch.
+	MaxBatchSize = 50_000
+	// MaxCustomIDLength is the maximum length for a batch request custom ID.
+	MaxCustomIDLength = 256
 )
 
 // Temperature and penalty bounds (OpenAI standard).
@@ -155,6 +163,50 @@ func validateRequest(req *Request) error {
 	return nil
 }
 
+// validateImageRequest validates image generation request parameters.
+func validateImageRequest(req *ImageRequest) error {
+	if req.Prompt == "" {
+		return ErrEmptyInput
+	}
+	if len(req.Prompt) > MaxImageGenPromptLength {
+		return fmt.Errorf("image prompt exceeds maximum length of %d", MaxImageGenPromptLength)
+	}
+	if req.N < 0 {
+		return fmt.Errorf("image count cannot be negative")
+	}
+	if req.N > MaxImageGenCount {
+		return fmt.Errorf("image count exceeds maximum of %d", MaxImageGenCount)
+	}
+	if req.Model != "" && len(req.Model) > MaxModelNameLength {
+		return fmt.Errorf("model name exceeds maximum length of %d", MaxModelNameLength)
+	}
+	return nil
+}
+
+// validateBatchRequests validates batch request parameters.
+func validateBatchRequests(requests []BatchRequest) error {
+	if len(requests) == 0 {
+		return ErrEmptyInput
+	}
+	if len(requests) > MaxBatchSize {
+		return fmt.Errorf("batch size exceeds maximum of %d", MaxBatchSize)
+	}
+	seen := make(map[string]bool, len(requests))
+	for i, r := range requests {
+		if r.CustomID == "" {
+			return fmt.Errorf("batch request %d has empty custom_id", i)
+		}
+		if len(r.CustomID) > MaxCustomIDLength {
+			return fmt.Errorf("batch request %d custom_id exceeds maximum length of %d", i, MaxCustomIDLength)
+		}
+		if seen[r.CustomID] {
+			return fmt.Errorf("batch request %d has duplicate custom_id: %s", i, r.CustomID)
+		}
+		seen[r.CustomID] = true
+	}
+	return nil
+}
+
 // sanitizeError removes sensitive information from errors before logging.
 // API errors from providers may contain API keys in URLs or headers.
 // This wraps non-sentinel errors to prevent accidental exposure.
@@ -166,7 +218,8 @@ func sanitizeError(err error) error {
 	if errors.Is(err, ErrRateLimited) || errors.Is(err, ErrTimeout) ||
 		errors.Is(err, ErrCanceled) || errors.Is(err, ErrEmptyResponse) ||
 		errors.Is(err, ErrNoProvider) || errors.Is(err, ErrEmptyInput) ||
-		errors.Is(err, ErrInputTooLong) || errors.Is(err, ErrProvider) {
+		errors.Is(err, ErrInputTooLong) || errors.Is(err, ErrProvider) ||
+		errors.Is(err, ErrNotSupported) {
 		return err
 	}
 	// Wrap provider errors — expose message but strip potential key material

@@ -308,7 +308,7 @@ func (p *OpenAICompatibleProvider) Models(ctx context.Context) ([]allm.Model, er
 func (p *OpenAICompatibleProvider) Embed(ctx context.Context, req *allm.EmbedRequest) (*allm.EmbedResponse, error) {
 	// Known providers: check registry for embed support
 	if reg, ok := knownProviders[p.name]; ok && !reg.embedSupport {
-		return nil, fmt.Errorf("allm: provider %s does not support embeddings", p.name)
+		return nil, fmt.Errorf("%w: embeddings (%s)", allm.ErrNotSupported, p.name)
 	}
 	// Unknown providers: allow if an embedding model is configured
 	if _, ok := knownProviders[p.name]; !ok && p.embedModel == "" && req.Model == "" {

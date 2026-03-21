@@ -152,8 +152,9 @@ func (p *AnthropicProvider) buildParams(req *allm.Request) (anthropic.MessageNew
 	for _, m := range req.Messages {
 		if m.Role == allm.RoleSystem {
 			block := anthropic.TextBlockParam{Text: m.Content}
-			// Note: CacheControl support requires SDK update
-			// For now, cache control is silently ignored on system blocks
+			if m.CacheControl != nil {
+				block.CacheControl = anthropic.NewCacheControlEphemeralParam()
+			}
 			systemBlocks = append(systemBlocks, block)
 			continue
 		}
@@ -172,17 +173,15 @@ func (p *AnthropicProvider) buildParams(req *allm.Request) (anthropic.MessageNew
 
 		if m.Content != "" {
 			textBlock := anthropic.NewTextBlock(m.Content)
-			// Note: CacheControl support requires SDK update
-			// For now, cache control is silently ignored
+			if m.CacheControl != nil {
+				textBlock.OfText.CacheControl = anthropic.NewCacheControlEphemeralParam()
+			}
 			parts = append(parts, textBlock)
 		}
 
 		for _, img := range m.Images {
 			data := base64.StdEncoding.EncodeToString(img.Data)
-			imgBlock := anthropic.NewImageBlockBase64(img.MimeType, data)
-			// Note: CacheControl support requires SDK update
-			// For now, cache control is silently ignored
-			parts = append(parts, imgBlock)
+			parts = append(parts, anthropic.NewImageBlockBase64(img.MimeType, data))
 		}
 
 		// Handle assistant messages with tool calls
@@ -260,13 +259,10 @@ func (p *AnthropicProvider) buildParams(req *allm.Request) (anthropic.MessageNew
 		}
 	}
 
-	// Note: Thinking / Extended Reasoning support requires SDK update
-	// For now, thinking is silently ignored until SDK is updated
-	// TODO: Add thinking support when SDK is updated with MessageNewParamsThinkingParam
-
-	// Note: ResponseFormat for structured output requires SDK update
-	// For now, response format is silently ignored until SDK is updated
-	// TODO: Add response_format support when SDK is updated
+	// Extended thinking / reasoning
+	if req.Thinking != nil && req.Thinking.BudgetTokens > 0 {
+		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(req.Thinking.BudgetTokens))
+	}
 
 	return params, nil
 }
@@ -369,25 +365,54 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, req *allm.Request) 
 		model = req.Model
 	}
 
+	if p.logger != nil {
+		p.logger.Debug("provider count tokens",
+			"provider", "anthropic",
+			"model", model,
+			"messages", len(req.Messages),
+		)
+	}
+
 	params, err := p.buildParams(req)
 	if err != nil {
 		return nil, err
 	}
 
-	// Use the messages.count_tokens endpoint
 	countParams := anthropic.MessageCountTokensParams{
 		Model:    anthropic.Model(model),
 		Messages: params.Messages,
 	}
 
-	// Note: System and Tools conversion may require SDK-specific types
-	// For now, we use a simplified approach that works with the current SDK
-	// The count_tokens endpoint may work without system/tools, or we may need to update this
-	// when the SDK types are more clearly defined
+	// Pass system prompt for accurate counting
+	if len(params.System) > 0 {
+		countParams.System = anthropic.MessageCountTokensParamsSystemUnion{
+			OfTextBlockArray: params.System,
+		}
+	}
+
+	// Pass thinking config for accurate counting
+	if req.Thinking != nil && req.Thinking.BudgetTokens > 0 {
+		countParams.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(req.Thinking.BudgetTokens))
+	}
 
 	result, err := p.client.Messages.CountTokens(ctx, countParams)
 	if err != nil {
+		if p.logger != nil {
+			p.logger.Debug("provider count tokens failed",
+				"provider", "anthropic",
+				"model", model,
+				"error", sanitizeProviderError(err),
+			)
+		}
 		return nil, err
+	}
+
+	if p.logger != nil {
+		p.logger.Debug("provider count tokens done",
+			"provider", "anthropic",
+			"model", model,
+			"input_tokens", result.InputTokens,
+		)
 	}
 
 	return &allm.TokenCount{

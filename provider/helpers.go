@@ -15,7 +15,7 @@ import (
 	"github.com/kusandriadi/allm-go"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/packages/ssestream"
-	"github.com/openai/openai-go/v3/shared"
+	"github.com/openai/openai-go/v3/shared" // ResponseFormat types
 )
 
 // validateBaseURLProvider checks if a base URL is safe from SSRF attacks.
@@ -268,15 +268,23 @@ func openaiChatParams(
 		params.Tools = convertToolsToOpenAI(req.Tools)
 	}
 
-	// ResponseFormat for structured output
-	// Note: The exact SDK types may vary. For now, we use a simplified approach.
-	// This will be updated when the SDK types are confirmed.
-	// For OpenAI SDK v3, response_format support may require specific types
-	// that are not yet available or have different names.
+	// Structured output: response_format
 	if req.ResponseFormat != nil {
-		// Placeholder for response format support
-		// TODO: Implement when SDK types are available
-		// The implementation depends on the exact types in openai-go v3
+		switch req.ResponseFormat.Type {
+		case allm.ResponseFormatJSON:
+			params.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
+				OfJSONObject: &shared.ResponseFormatJSONObjectParam{},
+			}
+		case allm.ResponseFormatJSONSchema:
+			params.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
+				OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+					JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+						Name:   req.ResponseFormat.Name,
+						Schema: req.ResponseFormat.Schema,
+					},
+				},
+			}
+		}
 	}
 
 	return params

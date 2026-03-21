@@ -529,8 +529,8 @@ func TestModelsNotSupported(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for provider without ModelLister")
 	}
-	if !strings.Contains(err.Error(), "does not support model listing") {
-		t.Errorf("unexpected error: %v", err)
+	if !errors.Is(err, ErrNotSupported) {
+		t.Errorf("expected ErrNotSupported, got: %v", err)
 	}
 }
 
@@ -824,8 +824,8 @@ func TestEmbedNotSupported(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for provider without Embedder")
 	}
-	if !strings.Contains(err.Error(), "does not support embeddings") {
-		t.Errorf("unexpected error: %v", err)
+	if !errors.Is(err, ErrNotSupported) {
+		t.Errorf("expected ErrNotSupported, got: %v", err)
 	}
 }
 
