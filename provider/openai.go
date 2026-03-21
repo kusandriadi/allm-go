@@ -19,6 +19,7 @@ type OpenAIProvider struct {
 	temperature float64
 	baseURL     string
 	client      openai.Client
+	logger      allm.Logger
 }
 
 // OpenAIOption configures the OpenAI provider.
@@ -49,6 +50,13 @@ func WithOpenAITemperature(t float64) OpenAIOption {
 func WithOpenAIBaseURL(url string) OpenAIOption {
 	return func(p *OpenAIProvider) {
 		p.baseURL = url
+	}
+}
+
+// WithOpenAILogger sets a logger for provider-level debug tracing.
+func WithOpenAILogger(logger allm.Logger) OpenAIOption {
+	return func(p *OpenAIProvider) {
+		p.logger = logger
 	}
 }
 
@@ -87,17 +95,44 @@ func (p *OpenAIProvider) Available() bool {
 // Complete sends a completion request.
 func (p *OpenAIProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
 	start := time.Now()
+	model := resolveModel(req.Model, p.model)
+
+	if p.logger != nil {
+		p.logger.Debug("provider complete",
+			"provider", "openai",
+			"model", model,
+			"messages", len(req.Messages),
+		)
+	}
 
 	messages := convertToOpenAI(req.Messages)
 	params := openaiChatParams(messages, p.model, p.maxTokens, p.temperature, req)
-	model := resolveModel(req.Model, p.model)
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
+		if p.logger != nil {
+			p.logger.Debug("provider complete failed",
+				"provider", "openai",
+				"model", model,
+				"latency", time.Since(start),
+				"error", sanitizeProviderError(err),
+			)
+		}
 		return nil, wrapOpenAIError(err)
 	}
 
-	return openaiCompleteResponse(completion, "openai", model, start)
+	resp, respErr := openaiCompleteResponse(completion, "openai", model, start)
+	if p.logger != nil && resp != nil {
+		p.logger.Debug("provider complete done",
+			"provider", "openai",
+			"model", model,
+			"latency", resp.Latency,
+			"input_tokens", resp.InputTokens,
+			"output_tokens", resp.OutputTokens,
+			"finish_reason", resp.FinishReason,
+		)
+	}
+	return resp, respErr
 }
 
 // Models returns available models from OpenAI.
@@ -116,6 +151,14 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *allm.Request) <-chan a
 
 	go func() {
 		defer close(out)
+
+		if p.logger != nil {
+			p.logger.Debug("provider stream",
+				"provider", "openai",
+				"model", resolveModel(req.Model, p.model),
+				"messages", len(req.Messages),
+			)
+		}
 
 		messages := convertToOpenAI(req.Messages)
 		params := openaiChatParams(messages, p.model, p.maxTokens, p.temperature, req)

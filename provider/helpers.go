@@ -83,6 +83,27 @@ func isLocalOrPrivate(hostname string) bool {
 		ip.IsUnspecified()
 }
 
+// sanitizeProviderError returns a safe error string for debug logging.
+// Strips potential API keys, auth tokens, and sensitive URL components.
+func sanitizeProviderError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	// Check for patterns that indicate API key leakage
+	lower := strings.ToLower(msg)
+	sensitivePatterns := []string{
+		"sk-ant-", "sk-", "gsk_", "api_key", "apikey",
+		"bearer ", "token=", "key=", "authorization:",
+	}
+	for _, p := range sensitivePatterns {
+		if strings.Contains(lower, p) {
+			return "(error redacted: may contain credentials)"
+		}
+	}
+	return msg
+}
+
 // wrapOpenAIError wraps OpenAI-compatible API errors with allm sentinel errors.
 // Returns ErrRateLimited for 429 status codes, otherwise returns the original error.
 func wrapOpenAIError(err error) error {

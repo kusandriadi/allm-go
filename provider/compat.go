@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"time"
 
@@ -10,6 +11,15 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 )
+
+// safeHost extracts just the hostname from a URL for safe logging (no path, no auth).
+func safeHost(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "(invalid)"
+	}
+	return u.Host
+}
 
 // providerRegistry holds metadata for known OpenAI-compatible providers.
 type providerRegistry struct {
@@ -83,6 +93,7 @@ type OpenAICompatibleProvider struct {
 	temperature float64
 	client      openai.Client
 	embedModel  string // for embeddings (GLM, Local)
+	logger      allm.Logger
 }
 
 // CompatOption configures the OpenAICompatible provider.
@@ -133,6 +144,13 @@ func WithEmbedModel(model string) CompatOption {
 	}
 }
 
+// WithProviderLogger sets a logger for provider-level debug tracing.
+func WithProviderLogger(logger allm.Logger) CompatOption {
+	return func(p *OpenAICompatibleProvider) {
+		p.logger = logger
+	}
+}
+
 // OpenAICompatible creates a new OpenAI-compatible provider.
 // If the provider name is in the registry, it uses those defaults.
 // Otherwise, it creates a custom provider with the given name.
@@ -175,6 +193,19 @@ func OpenAICompatible(name allm.ProviderName, apiKey string, opts ...CompatOptio
 	// Build client
 	p.client = p.buildClient()
 
+	if p.logger != nil {
+		authType := "api_key"
+		if p.apiKey == "" {
+			authType = "none"
+		}
+		p.logger.Debug("provider initialized",
+			"provider", string(name),
+			"host", safeHost(p.baseURL),
+			"model", p.model,
+			"auth", authType,
+		)
+	}
+
 	return p
 }
 
@@ -195,17 +226,45 @@ func (p *OpenAICompatibleProvider) Available() bool {
 // Complete sends a completion request.
 func (p *OpenAICompatibleProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
 	start := time.Now()
+	model := resolveModel(req.Model, p.model)
+
+	if p.logger != nil {
+		p.logger.Debug("provider complete",
+			"provider", string(p.name),
+			"host", safeHost(p.baseURL),
+			"model", model,
+			"messages", len(req.Messages),
+		)
+	}
 
 	messages := convertToOpenAI(req.Messages)
 	params := openaiChatParams(messages, p.model, p.maxTokens, p.temperature, req)
-	model := resolveModel(req.Model, p.model)
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
+		if p.logger != nil {
+			p.logger.Debug("provider complete failed",
+				"provider", string(p.name),
+				"model", model,
+				"latency", time.Since(start),
+				"error", sanitizeProviderError(err),
+			)
+		}
 		return nil, wrapOpenAIError(err)
 	}
 
-	return openaiCompleteResponse(completion, string(p.name), model, start)
+	resp, respErr := openaiCompleteResponse(completion, string(p.name), model, start)
+	if p.logger != nil && resp != nil {
+		p.logger.Debug("provider complete done",
+			"provider", string(p.name),
+			"model", model,
+			"latency", time.Since(start),
+			"input_tokens", resp.InputTokens,
+			"output_tokens", resp.OutputTokens,
+			"finish_reason", resp.FinishReason,
+		)
+	}
+	return resp, respErr
 }
 
 // Stream sends a real streaming request using the OpenAI-compatible SDK.
@@ -214,6 +273,16 @@ func (p *OpenAICompatibleProvider) Stream(ctx context.Context, req *allm.Request
 
 	go func() {
 		defer close(out)
+
+		model := resolveModel(req.Model, p.model)
+		if p.logger != nil {
+			p.logger.Debug("provider stream",
+				"provider", string(p.name),
+				"host", safeHost(p.baseURL),
+				"model", model,
+				"messages", len(req.Messages),
+			)
+		}
 
 		messages := convertToOpenAI(req.Messages)
 		params := openaiChatParams(messages, p.model, p.maxTokens, p.temperature, req)
@@ -227,6 +296,9 @@ func (p *OpenAICompatibleProvider) Stream(ctx context.Context, req *allm.Request
 
 // Models returns available models from the provider.
 func (p *OpenAICompatibleProvider) Models(ctx context.Context) ([]allm.Model, error) {
+	if p.logger != nil {
+		p.logger.Debug("provider models list", "provider", string(p.name), "host", safeHost(p.baseURL))
+	}
 	return openaiListModels(ctx, p.client, string(p.name))
 }
 
@@ -249,6 +321,14 @@ func (p *OpenAICompatibleProvider) Embed(ctx context.Context, req *allm.EmbedReq
 	}
 	if model == "" {
 		model = p.model // Fallback to chat model
+	}
+
+	if p.logger != nil {
+		p.logger.Debug("provider embed",
+			"provider", string(p.name),
+			"model", model,
+			"inputs", len(req.Input),
+		)
 	}
 
 	return openaiEmbed(ctx, p.client, req, model, string(p.name))

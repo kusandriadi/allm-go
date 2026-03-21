@@ -22,6 +22,7 @@ type ClaudeCLIProvider struct {
 	model   string
 	cliPath string // path to claude binary (default: "claude")
 	effort  string // effort level: low, medium, high (optional)
+	logger  allm.Logger
 }
 
 // CLIOption configures the ClaudeCLI provider.
@@ -45,6 +46,13 @@ func WithCLIPath(path string) CLIOption {
 func WithCLIEffort(effort string) CLIOption {
 	return func(p *ClaudeCLIProvider) {
 		p.effort = effort
+	}
+}
+
+// WithCLILogger sets a logger for provider-level debug tracing.
+func WithCLILogger(logger allm.Logger) CLIOption {
+	return func(p *ClaudeCLIProvider) {
+		p.logger = logger
 	}
 }
 
@@ -191,10 +199,24 @@ func truncateErr(s string) string {
 func (p *ClaudeCLIProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
 	start := time.Now()
 
+	model := p.model
+	if req.Model != "" {
+		model = req.Model
+	}
+
+	if p.logger != nil {
+		p.logger.Debug("provider complete",
+			"provider", "claude-cli",
+			"model", model,
+			"messages", len(req.Messages),
+			"cli_path", p.cliPath,
+		)
+	}
+
 	args, prompt := p.buildArgs(req, "json")
 
 	cmd := exec.CommandContext(ctx, p.cliPath, args...)
-	cmd.Stdin = strings.NewReader(prompt)
+	cmd.Stdin = strings.NewReader(prompt) // prompt not logged (may contain PII)
 	cmd.Env = os.Environ()
 
 	var stdout, stderr bytes.Buffer
@@ -221,12 +243,7 @@ func (p *ClaudeCLIProvider) Complete(ctx context.Context, req *allm.Request) (*a
 		return nil, fmt.Errorf("claude cli: %s", result.Result)
 	}
 
-	model := p.model
-	if req.Model != "" {
-		model = req.Model
-	}
-
-	return &allm.Response{
+	resp := &allm.Response{
 		Provider:     "claude-cli",
 		Model:        model,
 		Content:      result.Result,
@@ -234,7 +251,19 @@ func (p *ClaudeCLIProvider) Complete(ctx context.Context, req *allm.Request) (*a
 		OutputTokens: result.Usage.OutputTokens,
 		Latency:      time.Since(start),
 		FinishReason: "end_turn",
-	}, nil
+	}
+
+	if p.logger != nil {
+		p.logger.Debug("provider complete done",
+			"provider", "claude-cli",
+			"model", model,
+			"latency", resp.Latency,
+			"input_tokens", resp.InputTokens,
+			"output_tokens", resp.OutputTokens,
+		)
+	}
+
+	return resp, nil
 }
 
 // Stream sends a streaming request via claude CLI (stream-json output).

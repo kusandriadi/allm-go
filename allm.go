@@ -101,6 +101,7 @@ const RoleTool = "tool"
 // Logger is the interface for structured logging.
 // *slog.Logger satisfies this interface out of the box.
 type Logger interface {
+	Debug(msg string, args ...any)
 	Info(msg string, args ...any)
 	Warn(msg string, args ...any)
 	Error(msg string, args ...any)
@@ -504,6 +505,46 @@ func classifyError(err error, ctx context.Context) error {
 	return err
 }
 
+// requestMeta returns safe-to-log metadata about a request.
+// Never logs content, images, API keys, or anything sensitive.
+func requestMeta(messages []Message, s clientState) []any {
+	msgCount := len(messages)
+	var imageCount, toolResultCount int
+	for _, m := range messages {
+		imageCount += len(m.Images)
+		toolResultCount += len(m.ToolResults)
+	}
+
+	meta := []any{
+		"provider", s.provider.Name(),
+		"model", s.model,
+		"messages", msgCount,
+		"timeout", s.timeout,
+	}
+	if imageCount > 0 {
+		meta = append(meta, "images", imageCount)
+	}
+	if len(s.tools) > 0 {
+		meta = append(meta, "tools", len(s.tools))
+	}
+	if toolResultCount > 0 {
+		meta = append(meta, "tool_results", toolResultCount)
+	}
+	if s.maxTokens > 0 {
+		meta = append(meta, "max_tokens", s.maxTokens)
+	}
+	if s.temperature > 0 {
+		meta = append(meta, "temperature", s.temperature)
+	}
+	if s.systemPrompt != "" {
+		meta = append(meta, "has_system_prompt", true)
+	}
+	if s.maxRetries > 0 {
+		meta = append(meta, "max_retries", s.maxRetries)
+	}
+	return meta
+}
+
 // Complete sends a simple text completion request.
 func (c *Client) Complete(ctx context.Context, prompt string) (*Response, error) {
 	return c.Chat(ctx, []Message{{Role: RoleUser, Content: prompt}})
@@ -517,7 +558,14 @@ func (c *Client) Chat(ctx context.Context, messages []Message) (*Response, error
 		return nil, ErrNoProvider
 	}
 
+	if s.logger != nil {
+		s.logger.Debug("chat request", requestMeta(messages, s)...)
+	}
+
 	if err := validateMessages(messages, s.maxInputLen); err != nil {
+		if s.logger != nil {
+			s.logger.Debug("chat validation failed", "error", err)
+		}
 		return nil, err
 	}
 
@@ -525,6 +573,9 @@ func (c *Client) Chat(ctx context.Context, messages []Message) (*Response, error
 
 	// Validate request parameters for security
 	if err := validateRequest(req); err != nil {
+		if s.logger != nil {
+			s.logger.Debug("chat request validation failed", "error", err)
+		}
 		return nil, fmt.Errorf("invalid request: %w", err)
 	}
 
@@ -548,7 +599,14 @@ func (c *Client) Stream(ctx context.Context, messages []Message) <-chan StreamCh
 			return
 		}
 
+		if s.logger != nil {
+			s.logger.Debug("stream request", requestMeta(messages, s)...)
+		}
+
 		if err := validateMessages(messages, s.maxInputLen); err != nil {
+			if s.logger != nil {
+				s.logger.Debug("stream validation failed", "error", err)
+			}
 			out <- StreamChunk{Error: err}
 			return
 		}
@@ -557,6 +615,9 @@ func (c *Client) Stream(ctx context.Context, messages []Message) <-chan StreamCh
 
 		// Validate request parameters
 		if err := validateRequest(req); err != nil {
+			if s.logger != nil {
+				s.logger.Debug("stream request validation failed", "error", err)
+			}
 			out <- StreamChunk{Error: fmt.Errorf("invalid request: %w", err)}
 			return
 		}
@@ -564,21 +625,41 @@ func (c *Client) Stream(ctx context.Context, messages []Message) <-chan StreamCh
 		streamCtx, cancel := context.WithTimeout(ctx, s.timeout)
 		defer cancel()
 
+		if s.logger != nil {
+			s.logger.Debug("stream starting", "provider", s.provider.Name(), "model", s.model)
+		}
+
 		chunks := s.provider.Stream(streamCtx, req)
 
+		var chunkCount int
 		// Use select to handle context cancellation properly and prevent goroutine leaks
 		for {
 			select {
 			case <-streamCtx.Done():
+				if s.logger != nil {
+					s.logger.Debug("stream context done", "provider", s.provider.Name(), "chunks", chunkCount, "error", streamCtx.Err())
+				}
 				out <- StreamChunk{Error: classifyError(streamCtx.Err(), streamCtx)}
 				return
 			case chunk, ok := <-chunks:
 				if !ok {
-					// Provider closed the channel without sending Done - this is valid
+					if s.logger != nil {
+						s.logger.Debug("stream completed", "provider", s.provider.Name(), "chunks", chunkCount)
+					}
 					return
 				}
+				chunkCount++
 				out <- chunk
-				if chunk.Done || chunk.Error != nil {
+				if chunk.Done {
+					if s.logger != nil {
+						s.logger.Debug("stream done", "provider", s.provider.Name(), "chunks", chunkCount)
+					}
+					return
+				}
+				if chunk.Error != nil {
+					if s.logger != nil {
+						s.logger.Debug("stream error", "provider", s.provider.Name(), "chunks", chunkCount, "error", sanitizeError(chunk.Error))
+					}
 					return
 				}
 			}
@@ -622,6 +703,15 @@ func (c *Client) Embed(ctx context.Context, input ...string) (*EmbedResponse, er
 		return nil, ErrEmptyInput
 	}
 
+	if s.logger != nil {
+		s.logger.Debug("embed request",
+			"provider", s.provider.Name(),
+			"model", s.embeddingModel,
+			"inputs", len(input),
+			"timeout", s.timeout,
+		)
+	}
+
 	// Validate input strings (check for excessive length)
 	for i, text := range input {
 		if len(text) > s.maxInputLen {
@@ -644,6 +734,7 @@ func (c *Client) Embed(ctx context.Context, input ...string) (*EmbedResponse, er
 func (c *Client) Models(ctx context.Context) ([]Model, error) {
 	c.mu.RLock()
 	p := c.provider
+	logger := c.logger
 	c.mu.RUnlock()
 
 	if p == nil {
@@ -653,7 +744,20 @@ func (c *Client) Models(ctx context.Context) ([]Model, error) {
 	if !ok {
 		return nil, errors.New("allm: provider does not support model listing")
 	}
-	return lister.Models(ctx)
+
+	if logger != nil {
+		logger.Debug("models list request", "provider", p.Name())
+	}
+
+	models, err := lister.Models(ctx)
+	if logger != nil {
+		if err != nil {
+			logger.Debug("models list failed", "provider", p.Name(), "error", sanitizeError(err))
+		} else {
+			logger.Debug("models list completed", "provider", p.Name(), "count", len(models))
+		}
+	}
+	return models, err
 }
 
 // Provider returns the underlying provider.

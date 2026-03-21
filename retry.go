@@ -61,6 +61,15 @@ func retryWithBackoff[T any](
 		}
 
 		// Per-attempt timeout
+		if s.logger != nil && attempt > 0 {
+			s.logger.Debug(opName+" retry attempt starting",
+				"provider", s.provider.Name(),
+				"model", s.model,
+				"attempt", attempt+1,
+				"max_attempts", maxAttempts,
+			)
+		}
+
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, s.timeout)
 		start := time.Now()
 		result, err := op(attemptCtx)
@@ -74,12 +83,30 @@ func retryWithBackoff[T any](
 
 		if err == nil {
 			if s.logger != nil {
-				s.logger.Info(opName+" request succeeded",
+				logArgs := []any{
 					"provider", s.provider.Name(),
 					"model", s.model,
 					"latency", latency,
-					"attempt", attempt+1,
-				)
+					"attempt", attempt + 1,
+				}
+				// Add token counts for debug tracing
+				if resp, ok := any(result).(*Response); ok && resp != nil {
+					logArgs = append(logArgs,
+						"input_tokens", resp.InputTokens,
+						"output_tokens", resp.OutputTokens,
+						"finish_reason", resp.FinishReason,
+					)
+					if len(resp.ToolCalls) > 0 {
+						logArgs = append(logArgs, "tool_calls", len(resp.ToolCalls))
+					}
+				}
+				if resp, ok := any(result).(*EmbedResponse); ok && resp != nil {
+					logArgs = append(logArgs,
+						"embeddings", len(resp.Embeddings),
+						"input_tokens", resp.InputTokens,
+					)
+				}
+				s.logger.Info(opName+" request succeeded", logArgs...)
 			}
 			if s.hook != nil {
 				event := HookEvent{

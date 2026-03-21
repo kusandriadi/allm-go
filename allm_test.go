@@ -1303,11 +1303,17 @@ func (e *failNEmbedder) Embed(_ context.Context, _ *EmbedRequest) (*EmbedRespons
 // mockLogger records log calls.
 type mockLogger struct {
 	mu      sync.Mutex
+	debugs  []string
 	infos   []string
 	warns   []string
 	errors_ []string
 }
 
+func (l *mockLogger) Debug(msg string, args ...any) {
+	l.mu.Lock()
+	l.debugs = append(l.debugs, msg)
+	l.mu.Unlock()
+}
 func (l *mockLogger) Info(msg string, args ...any) {
 	l.mu.Lock()
 	l.infos = append(l.infos, msg)
@@ -1324,6 +1330,7 @@ func (l *mockLogger) Error(msg string, args ...any) {
 	l.mu.Unlock()
 }
 
+func (l *mockLogger) debugCount() int { l.mu.Lock(); defer l.mu.Unlock(); return len(l.debugs) }
 func (l *mockLogger) infoCount() int  { l.mu.Lock(); defer l.mu.Unlock(); return len(l.infos) }
 func (l *mockLogger) errorCount() int { l.mu.Lock(); defer l.mu.Unlock(); return len(l.errors_) }
 
@@ -1498,6 +1505,10 @@ func TestLoggerCalledOnSuccess(t *testing.T) {
 	}
 	if logger.infoCount() != 1 {
 		t.Errorf("expected 1 info log, got %d", logger.infoCount())
+	}
+	// Debug should log request metadata
+	if logger.debugCount() < 1 {
+		t.Errorf("expected debug logs, got %d", logger.debugCount())
 	}
 }
 

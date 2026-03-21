@@ -38,6 +38,7 @@ type AnthropicProvider struct {
 	temperature float64
 	baseURL     string
 	client      anthropic.Client
+	logger      allm.Logger
 }
 
 // AnthropicOption configures the Anthropic provider.
@@ -77,6 +78,13 @@ func WithAnthropicBaseURL(url string) AnthropicOption {
 func WithAnthropicAuthToken(token string) AnthropicOption {
 	return func(p *AnthropicProvider) {
 		p.authToken = token
+	}
+}
+
+// WithAnthropicLogger sets a logger for provider-level debug tracing.
+func WithAnthropicLogger(logger allm.Logger) AnthropicOption {
+	return func(p *AnthropicProvider) {
+		p.logger = logger
 	}
 }
 
@@ -249,18 +257,34 @@ func (p *AnthropicProvider) buildParams(req *allm.Request) (anthropic.MessageNew
 func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
 	start := time.Now()
 
-	params, err := p.buildParams(req)
-	if err != nil {
-		return nil, err
-	}
-
 	model := p.model
 	if req.Model != "" {
 		model = req.Model
 	}
 
+	if p.logger != nil {
+		p.logger.Debug("provider complete",
+			"provider", "anthropic",
+			"model", model,
+			"messages", len(req.Messages),
+		)
+	}
+
+	params, err := p.buildParams(req)
+	if err != nil {
+		return nil, err
+	}
+
 	message, err := p.client.Messages.New(ctx, params)
 	if err != nil {
+		if p.logger != nil {
+			p.logger.Debug("provider complete failed",
+				"provider", "anthropic",
+				"model", model,
+				"latency", time.Since(start),
+				"error", sanitizeProviderError(err),
+			)
+		}
 		return nil, wrapAnthropicError(err)
 	}
 
@@ -290,6 +314,21 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*a
 		}
 	}
 
+	if p.logger != nil {
+		logArgs := []any{
+			"provider", "anthropic",
+			"model", model,
+			"latency", resp.Latency,
+			"input_tokens", resp.InputTokens,
+			"output_tokens", resp.OutputTokens,
+			"finish_reason", resp.FinishReason,
+		}
+		if len(resp.ToolCalls) > 0 {
+			logArgs = append(logArgs, "tool_calls", len(resp.ToolCalls))
+		}
+		p.logger.Debug("provider complete done", logArgs...)
+	}
+
 	return resp, nil
 }
 
@@ -317,6 +356,19 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *allm.Request) <-cha
 
 	go func() {
 		defer close(out)
+
+		model := p.model
+		if req.Model != "" {
+			model = req.Model
+		}
+
+		if p.logger != nil {
+			p.logger.Debug("provider stream",
+				"provider", "anthropic",
+				"model", model,
+				"messages", len(req.Messages),
+			)
+		}
 
 		params, err := p.buildParams(req)
 		if err != nil {
