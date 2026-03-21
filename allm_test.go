@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -924,6 +925,8 @@ func TestErrorSentinels(t *testing.T) {
 		{"ErrEmptyInput", ErrEmptyInput},
 		{"ErrInputTooLong", ErrInputTooLong},
 		{"ErrRateLimited", ErrRateLimited},
+		{"ErrServerError", ErrServerError},
+		{"ErrOverloaded", ErrOverloaded},
 		{"ErrTimeout", ErrTimeout},
 		{"ErrCanceled", ErrCanceled},
 		{"ErrProvider", ErrProvider},
@@ -1836,7 +1839,8 @@ func TestSanitizeErrorNil(t *testing.T) {
 
 func TestSanitizeErrorSentinel(t *testing.T) {
 	sentinels := []error{
-		ErrRateLimited, ErrTimeout, ErrCanceled, ErrEmptyResponse,
+		ErrRateLimited, ErrServerError, ErrOverloaded,
+		ErrTimeout, ErrCanceled, ErrEmptyResponse,
 		ErrNoProvider, ErrEmptyInput, ErrInputTooLong, ErrProvider,
 	}
 	for _, err := range sentinels {
@@ -1892,4 +1896,287 @@ func TestWithRetryMaxDelayTooLargePanics(t *testing.T) {
 		}
 	}()
 	WithRetryMaxDelay(10 * time.Minute)(&Client{})
+}
+
+// --- Retry on server errors ---
+
+func TestRetryOnServerError(t *testing.T) {
+	p := &failNProvider{
+		name:      "test",
+		failCount: 1,
+		failErr:   ErrServerError,
+		response:  &Response{Content: "OK", Provider: "test"},
+	}
+	c := New(p,
+		WithMaxRetries(2),
+		WithRetryBaseDelay(1*time.Millisecond),
+		WithRetryMaxDelay(10*time.Millisecond),
+	)
+
+	resp, err := c.Complete(context.Background(), "Hi")
+	if err != nil {
+		t.Fatalf("expected success after retry, got %v", err)
+	}
+	if resp.Content != "OK" {
+		t.Errorf("expected OK, got %q", resp.Content)
+	}
+	if p.getCalls() != 2 {
+		t.Errorf("expected 2 calls, got %d", p.getCalls())
+	}
+}
+
+func TestRetryOnOverloaded(t *testing.T) {
+	p := &failNProvider{
+		name:      "test",
+		failCount: 2,
+		failErr:   ErrOverloaded,
+		response:  &Response{Content: "OK", Provider: "test"},
+	}
+	c := New(p,
+		WithMaxRetries(3),
+		WithRetryBaseDelay(1*time.Millisecond),
+		WithRetryMaxDelay(10*time.Millisecond),
+	)
+
+	resp, err := c.Complete(context.Background(), "Hi")
+	if err != nil {
+		t.Fatalf("expected success after retry, got %v", err)
+	}
+	if resp.Content != "OK" {
+		t.Errorf("expected OK, got %q", resp.Content)
+	}
+	if p.getCalls() != 3 {
+		t.Errorf("expected 3 calls, got %d", p.getCalls())
+	}
+}
+
+func TestRetryNotOnProviderError(t *testing.T) {
+	// Non-retryable provider error should not be retried
+	p := &failNProvider{
+		name:      "test",
+		failCount: 10,
+		failErr:   errors.New("invalid api key"),
+		response:  &Response{Content: "OK"},
+	}
+	c := New(p,
+		WithMaxRetries(3),
+		WithRetryBaseDelay(1*time.Millisecond),
+	)
+
+	_, err := c.Complete(context.Background(), "Hi")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if p.getCalls() != 1 {
+		t.Errorf("expected 1 call (no retry for non-retryable), got %d", p.getCalls())
+	}
+}
+
+// --- isRetryable tests ---
+
+func TestIsRetryable(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		retryable bool
+	}{
+		{"rate limited", ErrRateLimited, true},
+		{"server error", ErrServerError, true},
+		{"overloaded", ErrOverloaded, true},
+		{"timeout", ErrTimeout, true},
+		{"empty response", ErrEmptyResponse, true},
+		{"canceled", ErrCanceled, false},
+		{"no provider", ErrNoProvider, false},
+		{"empty input", ErrEmptyInput, false},
+		{"generic error", errors.New("something"), false},
+		{"wrapped rate limit", fmt.Errorf("wrap: %w", ErrRateLimited), true},
+		{"wrapped server error", fmt.Errorf("wrap: %w", ErrServerError), true},
+		{"wrapped overloaded", fmt.Errorf("wrap: %w", ErrOverloaded), true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isRetryable(tc.err); got != tc.retryable {
+				t.Errorf("isRetryable(%v) = %v, want %v", tc.err, got, tc.retryable)
+			}
+		})
+	}
+}
+
+// --- Ping / Health Check tests ---
+
+func TestPingNoProvider(t *testing.T) {
+	c := &Client{}
+	status := c.Ping(context.Background())
+
+	if status.OK {
+		t.Error("expected not OK for nil provider")
+	}
+	if !errors.Is(status.Error, ErrNoProvider) {
+		t.Errorf("expected ErrNoProvider, got %v", status.Error)
+	}
+}
+
+func TestPingWithModelLister(t *testing.T) {
+	p := &mockModelLister{
+		mockProvider: mockProvider{name: "test", available: true},
+		models: []Model{
+			{ID: "model-1", Name: "Model One", Provider: "test"},
+			{ID: "model-2", Name: "Model Two", Provider: "test"},
+		},
+	}
+	c := New(p)
+
+	status := c.Ping(context.Background())
+	if !status.OK {
+		t.Errorf("expected OK, got error: %v", status.Error)
+	}
+	if status.Provider != "test" {
+		t.Errorf("expected provider 'test', got %q", status.Provider)
+	}
+	if status.Models != 2 {
+		t.Errorf("expected 2 models, got %d", status.Models)
+	}
+	if status.Latency <= 0 {
+		t.Error("expected positive latency")
+	}
+}
+
+func TestPingFallbackToComplete(t *testing.T) {
+	// mockProvider doesn't implement ModelLister, so Ping falls back to Complete
+	p := &mockProvider{
+		name:      "test",
+		available: true,
+		response:  &Response{Content: "pong"},
+	}
+	c := New(p)
+
+	status := c.Ping(context.Background())
+	if !status.OK {
+		t.Errorf("expected OK, got error: %v", status.Error)
+	}
+	if status.Provider != "test" {
+		t.Errorf("expected provider 'test', got %q", status.Provider)
+	}
+	if status.Models != 0 {
+		t.Errorf("expected 0 models (fallback mode), got %d", status.Models)
+	}
+}
+
+func TestPingModelListerError(t *testing.T) {
+	p := &mockModelLister{
+		mockProvider: mockProvider{name: "broken", available: true, err: errors.New("connection refused")},
+	}
+	c := New(p)
+
+	status := c.Ping(context.Background())
+	if status.OK {
+		t.Error("expected not OK for erroring provider")
+	}
+	if status.Error == nil {
+		t.Error("expected error to be set")
+	}
+	if status.Provider != "broken" {
+		t.Errorf("expected provider 'broken', got %q", status.Provider)
+	}
+}
+
+func TestPingCompleteError(t *testing.T) {
+	p := &mockProvider{
+		name:      "broken",
+		available: true,
+		err:       errors.New("connection refused"),
+	}
+	c := New(p)
+
+	status := c.Ping(context.Background())
+	if status.OK {
+		t.Error("expected not OK for erroring provider")
+	}
+	if status.Error == nil {
+		t.Error("expected error to be set")
+	}
+}
+
+func TestPingWithLogger(t *testing.T) {
+	p := &mockModelLister{
+		mockProvider: mockProvider{name: "test", available: true},
+		models:       []Model{{ID: "m1"}},
+	}
+	logger := &mockLogger{}
+	c := New(p, WithLogger(logger))
+
+	status := c.Ping(context.Background())
+	if !status.OK {
+		t.Errorf("expected OK, got error: %v", status.Error)
+	}
+	if logger.debugCount() < 1 {
+		t.Error("expected debug logs from ping")
+	}
+}
+
+func TestPingTimeout(t *testing.T) {
+	// Provider that takes too long
+	slowP := &slowMockModelLister{
+		delay:  2 * time.Second,
+		models: []Model{{ID: "m1"}},
+	}
+	c := New(slowP, WithTimeout(50*time.Millisecond))
+
+	status := c.Ping(context.Background())
+	if status.OK {
+		t.Error("expected not OK for timed-out ping")
+	}
+	if status.Latency < 40*time.Millisecond {
+		t.Errorf("expected latency near timeout, got %v", status.Latency)
+	}
+}
+
+// slowMockModelLister implements Provider + ModelLister with a delay.
+type slowMockModelLister struct {
+	delay  time.Duration
+	models []Model
+}
+
+func (m *slowMockModelLister) Name() string    { return "slow" }
+func (m *slowMockModelLister) Available() bool { return true }
+func (m *slowMockModelLister) Complete(ctx context.Context, _ *Request) (*Response, error) {
+	select {
+	case <-time.After(m.delay):
+		return &Response{Content: "OK"}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+func (m *slowMockModelLister) Stream(_ context.Context, _ *Request) <-chan StreamChunk {
+	out := make(chan StreamChunk)
+	close(out)
+	return out
+}
+func (m *slowMockModelLister) Models(ctx context.Context) ([]Model, error) {
+	select {
+	case <-time.After(m.delay):
+		return m.models, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// --- HealthStatus struct tests ---
+
+func TestHealthStatusFields(t *testing.T) {
+	status := &HealthStatus{
+		OK:       true,
+		Provider: "anthropic",
+		Latency:  150 * time.Millisecond,
+		Models:   42,
+	}
+	if !status.OK {
+		t.Error("expected OK")
+	}
+	if status.Provider != "anthropic" {
+		t.Errorf("expected anthropic, got %s", status.Provider)
+	}
+	if status.Models != 42 {
+		t.Errorf("expected 42 models, got %d", status.Models)
+	}
 }

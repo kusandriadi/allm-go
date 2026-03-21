@@ -17,14 +17,24 @@ import (
 )
 
 // wrapAnthropicError wraps Anthropic API errors with allm sentinel errors.
-// Returns ErrRateLimited for 429 status codes, otherwise returns the original error.
+// Maps HTTP status codes to allm errors:
+//   - 429 → ErrRateLimited
+//   - 529 → ErrOverloaded (Anthropic-specific: API overloaded)
+//   - 500-599 → ErrServerError
 func wrapAnthropicError(err error) error {
 	if err == nil {
 		return nil
 	}
 	var apiErr *anthropic.Error
-	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusTooManyRequests {
-		return fmt.Errorf("%w: %w", allm.ErrRateLimited, err)
+	if errors.As(err, &apiErr) {
+		switch {
+		case apiErr.StatusCode == http.StatusTooManyRequests:
+			return fmt.Errorf("%w: %w", allm.ErrRateLimited, err)
+		case apiErr.StatusCode == 529:
+			return fmt.Errorf("%w: %w", allm.ErrOverloaded, err)
+		case apiErr.StatusCode >= 500 && apiErr.StatusCode < 600:
+			return fmt.Errorf("%w: %w", allm.ErrServerError, err)
+		}
 	}
 	return err
 }

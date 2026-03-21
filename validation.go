@@ -215,7 +215,8 @@ func sanitizeError(err error) error {
 		return nil
 	}
 	// Sentinel errors are safe — return as-is
-	if errors.Is(err, ErrRateLimited) || errors.Is(err, ErrTimeout) ||
+	if errors.Is(err, ErrRateLimited) || errors.Is(err, ErrServerError) ||
+		errors.Is(err, ErrOverloaded) || errors.Is(err, ErrTimeout) ||
 		errors.Is(err, ErrCanceled) || errors.Is(err, ErrEmptyResponse) ||
 		errors.Is(err, ErrNoProvider) || errors.Is(err, ErrEmptyInput) ||
 		errors.Is(err, ErrInputTooLong) || errors.Is(err, ErrProvider) ||

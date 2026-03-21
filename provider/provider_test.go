@@ -193,7 +193,7 @@ func TestWrapOpenAIErrorRateLimit(t *testing.T) {
 	}
 }
 
-func TestWrapOpenAIErrorNonRateLimit(t *testing.T) {
+func TestWrapOpenAIErrorServerError(t *testing.T) {
 	apiErr := &openai.Error{
 		StatusCode: http.StatusInternalServerError,
 		Request:    &http.Request{},
@@ -202,6 +202,52 @@ func TestWrapOpenAIErrorNonRateLimit(t *testing.T) {
 	wrapped := wrapOpenAIError(apiErr)
 	if errors.Is(wrapped, allm.ErrRateLimited) {
 		t.Error("should not be ErrRateLimited for 500")
+	}
+	if !errors.Is(wrapped, allm.ErrServerError) {
+		t.Errorf("expected ErrServerError for 500, got %v", wrapped)
+	}
+}
+
+func TestWrapOpenAIErrorOverloaded(t *testing.T) {
+	apiErr := &openai.Error{
+		StatusCode: 529,
+		Request:    &http.Request{},
+		Response:   &http.Response{StatusCode: 529},
+	}
+	wrapped := wrapOpenAIError(apiErr)
+	if !errors.Is(wrapped, allm.ErrOverloaded) {
+		t.Errorf("expected ErrOverloaded for 529, got %v", wrapped)
+	}
+}
+
+func TestWrapOpenAIError5xxRange(t *testing.T) {
+	for _, code := range []int{500, 502, 503, 504} {
+		apiErr := &openai.Error{
+			StatusCode: code,
+			Request:    &http.Request{},
+			Response:   &http.Response{StatusCode: code},
+		}
+		wrapped := wrapOpenAIError(apiErr)
+		if !errors.Is(wrapped, allm.ErrServerError) {
+			t.Errorf("expected ErrServerError for %d, got %v", code, wrapped)
+		}
+	}
+}
+
+func TestWrapOpenAIError4xxNotRetryable(t *testing.T) {
+	for _, code := range []int{400, 401, 403, 404} {
+		apiErr := &openai.Error{
+			StatusCode: code,
+			Request:    &http.Request{},
+			Response:   &http.Response{StatusCode: code},
+		}
+		wrapped := wrapOpenAIError(apiErr)
+		if errors.Is(wrapped, allm.ErrServerError) {
+			t.Errorf("should not be ErrServerError for %d", code)
+		}
+		if errors.Is(wrapped, allm.ErrRateLimited) {
+			t.Errorf("should not be ErrRateLimited for %d", code)
+		}
 	}
 }
 
@@ -234,13 +280,38 @@ func TestWrapAnthropicErrorRateLimit(t *testing.T) {
 	}
 }
 
-func TestWrapAnthropicErrorNonRateLimit(t *testing.T) {
+func TestWrapAnthropicErrorServerError(t *testing.T) {
 	apiErr := &anthropic.Error{
 		StatusCode: http.StatusInternalServerError,
 	}
 	wrapped := wrapAnthropicError(apiErr)
 	if errors.Is(wrapped, allm.ErrRateLimited) {
 		t.Error("should not be ErrRateLimited for 500")
+	}
+	if !errors.Is(wrapped, allm.ErrServerError) {
+		t.Errorf("expected ErrServerError for 500, got %v", wrapped)
+	}
+}
+
+func TestWrapAnthropicErrorOverloaded(t *testing.T) {
+	apiErr := &anthropic.Error{
+		StatusCode: 529,
+	}
+	wrapped := wrapAnthropicError(apiErr)
+	if !errors.Is(wrapped, allm.ErrOverloaded) {
+		t.Errorf("expected ErrOverloaded for 529, got %v", wrapped)
+	}
+}
+
+func TestWrapAnthropicError5xxRange(t *testing.T) {
+	for _, code := range []int{500, 502, 503, 504} {
+		apiErr := &anthropic.Error{
+			StatusCode: code,
+		}
+		wrapped := wrapAnthropicError(apiErr)
+		if !errors.Is(wrapped, allm.ErrServerError) {
+			t.Errorf("expected ErrServerError for %d, got %v", code, wrapped)
+		}
 	}
 }
 

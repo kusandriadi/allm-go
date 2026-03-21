@@ -46,6 +46,8 @@ var (
 	ErrEmptyInput    = errors.New("allm: empty input")
 	ErrInputTooLong  = errors.New("allm: input exceeds max length")
 	ErrRateLimited   = errors.New("allm: rate limited")
+	ErrServerError   = errors.New("allm: server error (5xx)")
+	ErrOverloaded    = errors.New("allm: provider overloaded")
 	ErrTimeout       = errors.New("allm: request timeout")
 	ErrCanceled      = errors.New("allm: request canceled")
 	ErrProvider      = errors.New("allm: provider error")
@@ -648,11 +650,14 @@ func buildRequest(messages []Message, s clientState) *Request {
 }
 
 // isRetryable returns true if the error is transient and worth retrying.
+// Retryable errors: rate limits (429), server errors (5xx), overloaded (529),
+// timeouts, and empty responses.
 func isRetryable(err error) bool {
-	if errors.Is(err, ErrRateLimited) || errors.Is(err, ErrTimeout) || errors.Is(err, ErrEmptyResponse) {
-		return true
-	}
-	return false
+	return errors.Is(err, ErrRateLimited) ||
+		errors.Is(err, ErrServerError) ||
+		errors.Is(err, ErrOverloaded) ||
+		errors.Is(err, ErrTimeout) ||
+		errors.Is(err, ErrEmptyResponse)
 }
 
 // retryDelay calculates the backoff delay for a given attempt using exponential backoff with jitter.
@@ -1195,6 +1200,88 @@ func (c *Client) GetBatch(ctx context.Context, batchID string) (*Batch, error) {
 	}
 
 	return batcher.GetBatch(ctx, batchID)
+}
+
+// HealthStatus represents the result of a provider health check.
+type HealthStatus struct {
+	OK       bool          // True if provider is reachable and responding
+	Provider string        // Provider name
+	Latency  time.Duration // Round-trip latency
+	Error    error         // Error details if not OK
+	Models   int           // Number of models returned (if listing supported)
+}
+
+// Ping checks if the provider is reachable and responding.
+// It attempts to list models (lightweight, no tokens consumed).
+// If the provider doesn't support model listing, it sends a minimal
+// completion request to verify connectivity.
+func (c *Client) Ping(ctx context.Context) *HealthStatus {
+	s := c.snapshot()
+
+	status := &HealthStatus{Provider: "unknown"}
+	if s.provider == nil {
+		status.Error = ErrNoProvider
+		return status
+	}
+	status.Provider = s.provider.Name()
+
+	if s.logger != nil {
+		s.logger.Debug("ping", "provider", s.provider.Name())
+	}
+
+	// Use a short timeout for health checks
+	pingTimeout := 10 * time.Second
+	if s.timeout > 0 && s.timeout < pingTimeout {
+		pingTimeout = s.timeout
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, pingTimeout)
+	defer cancel()
+
+	start := time.Now()
+
+	// Try listing models first (no tokens consumed)
+	if lister, ok := s.provider.(ModelLister); ok {
+		models, err := lister.Models(pingCtx)
+		status.Latency = time.Since(start)
+		if err != nil {
+			status.Error = err
+			if s.logger != nil {
+				s.logger.Debug("ping failed (models)", "provider", s.provider.Name(), "latency", status.Latency, "error", sanitizeError(err))
+			}
+			return status
+		}
+		status.OK = true
+		status.Models = len(models)
+		if s.logger != nil {
+			s.logger.Debug("ping ok (models)", "provider", s.provider.Name(), "latency", status.Latency, "models", status.Models)
+		}
+		return status
+	}
+
+	// Fallback: minimal completion request
+	req := &Request{
+		Messages:  []Message{{Role: RoleUser, Content: "ping"}},
+		MaxTokens: 1,
+	}
+	if s.model != "" {
+		req.Model = s.model
+	}
+
+	_, err := s.provider.Complete(pingCtx, req)
+	status.Latency = time.Since(start)
+	if err != nil {
+		status.Error = err
+		if s.logger != nil {
+			s.logger.Debug("ping failed (complete)", "provider", s.provider.Name(), "latency", status.Latency, "error", sanitizeError(err))
+		}
+		return status
+	}
+
+	status.OK = true
+	if s.logger != nil {
+		s.logger.Debug("ping ok (complete)", "provider", s.provider.Name(), "latency", status.Latency)
+	}
+	return status
 }
 
 // ImageOption configures image generation.
