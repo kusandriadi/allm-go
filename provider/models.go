@@ -153,4 +153,3 @@ const (
 	// MiniMax Text 01 128K - Extended context
 	MiniMaxText01_128K = "MiniMax-Text-01-128K"
 )
-

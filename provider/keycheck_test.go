@@ -52,7 +52,6 @@ func TestValidateKeyFormat(t *testing.T) {
 		// GLM
 		{"valid glm", allm.GLM, strings.Repeat("x", 20), false},
 		{"short glm", allm.GLM, "tiny", true},
-
 	}
 
 	for _, tt := range tests {

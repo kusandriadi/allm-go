@@ -17,11 +17,11 @@ import (
 
 // integrationCase defines a provider integration test.
 type integrationCase struct {
-	name    string
-	envKey  string
-	setup   func() allm.Provider
-	model   string // optional model override
-	skips   []allmtest.VerifyOption
+	name   string
+	envKey string
+	setup  func() allm.Provider
+	model  string // optional model override
+	skips  []allmtest.VerifyOption
 }
 
 var integrationCases = []integrationCase{
