@@ -13,7 +13,7 @@ features_test.go     # Tests for v0.8.0 features (structured output, thinking, e
 provider/
   anthropic.go       # Anthropic Claude (native SDK) — thinking, caching, token counting
   openai.go          # OpenAI GPT (native SDK) — image generation, batch stubs
-  claude_cli.go      # Claude CLI provider (exec-based)
+  claude_cli.go      # Claude CLI provider (exec-based, OAuth token support)
   compat.go          # OpenAI-compatible provider + registry
   shortcuts.go       # Provider shortcut constructors
   helpers.go         # Shared helpers: message conversion, response format, SSRF validation
@@ -31,12 +31,17 @@ examples/            # Usage examples per provider
 
 ```go
 Provider       // Core: Name, Complete, Stream, Available
-ModelLister    // Optional: Models listing
+ModelLister    // Optional: Models listing (used by Ping for health checks)
 Embedder       // Optional: text embeddings
 TokenCounter   // Optional: pre-request token counting (Anthropic)
 BatchProvider  // Optional: batch processing
 ImageGenerator // Optional: image generation (OpenAI)
 ```
+
+## Health Check
+
+`client.Ping(ctx)` returns `*HealthStatus` with OK, Provider, Latency, Error, Models.
+Tries `ModelLister.Models()` first (no tokens consumed), falls back to minimal `Complete("ping", maxTokens=1)`.
 
 ## Adding a New Provider
 
@@ -87,7 +92,7 @@ This project targets OWASP Top 10 compliance. Non-negotiable:
 - **CLI injection (A03)**: `validateCLIPath()` rejects path traversal and shell metacharacters.
 - **Input limits (A05)**: `MaxImageSize`, `MaxMaxTokens`, `MaxModelNameLength`, `MaxImageGenPromptLength`, `MaxBatchSize`, etc. in `validation.go`.
 - **No `InsecureSkipVerify`**: Never bypass TLS verification.
-- **Error sentinel**: Use `ErrNotSupported` for unsupported features, not format strings.
+- **Error sentinels**: Use `ErrNotSupported` for unsupported features. Use `ErrServerError` (5xx), `ErrOverloaded` (529), `ErrRateLimited` (429) for HTTP status mapping in provider error wrappers.
 
 ## Code Style
 

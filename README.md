@@ -14,7 +14,7 @@ fmt.Println(resp.Content)
 
 ## Features
 
-- **9 providers** — Anthropic, OpenAI, DeepSeek, Gemini, GLM, Kimi, Qwen, MiniMax, Local (Ollama/vLLM)
+- **10 providers** — Anthropic, OpenAI, DeepSeek, Gemini, GLM, Kimi, Qwen, MiniMax, Local (Ollama/vLLM), Claude CLI
 - **Any OpenAI-compatible API** via `OpenAICompatible()` — add new providers in one line
 - **Chat, streaming, vision, embeddings, tool use** — same API across all providers
 - **Structured output** — JSON mode and JSON Schema for guaranteed structured responses
@@ -25,7 +25,8 @@ fmt.Println(resp.Content)
 - **Image generation** — DALL-E support via OpenAI
 - **Batch API** — submit bulk requests for async processing
 - **Thread-safe** — use one client from multiple goroutines
-- **Retry with backoff** — automatic retry on rate limits and transient errors
+- **Health check** — `Ping()` verifies provider connectivity without consuming tokens
+- **Retry with backoff** — automatic retry on rate limits (429), server errors (5xx), and overloaded (529)
 - **Testing utilities** — mock provider and `allmtest.Verify()` for integration tests
 - **Security** — SSRF protection, input validation, API key leak detection, error sanitization
 
@@ -88,6 +89,7 @@ provider.Qwen(apiKey)            // Alibaba Qwen (DashScope)
 provider.MiniMax(apiKey)         // MiniMax
 provider.Ollama("llama3")        // Local — Ollama
 provider.VLLM("mistral")        // Local — vLLM
+provider.ClaudeCLI()             // Claude CLI (exec-based, uses local claude binary)
 ```
 
 Pass `""` to read from environment variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, etc).
@@ -185,6 +187,22 @@ client := allm.New(p,
 // If messages exceed 100k tokens, oldest non-system messages are removed
 resp, _ := client.Chat(ctx, longConversation)
 ```
+
+## Health Check
+
+Verify provider connectivity without consuming tokens:
+
+```go
+status := client.Ping(ctx)
+if status.OK {
+    fmt.Printf("Provider %s is up (latency: %v, models: %d)\n",
+        status.Provider, status.Latency, status.Models)
+} else {
+    fmt.Printf("Provider %s is down: %v\n", status.Provider, status.Error)
+}
+```
+
+`Ping()` tries `ListModels` first (free), falls back to a minimal completion if the provider doesn't support model listing.
 
 ## Vision & Embeddings
 
@@ -286,7 +304,9 @@ if errors.Is(err, allm.ErrNotSupported) {
 }
 ```
 
-Sentinel errors: `ErrRateLimited`, `ErrTimeout`, `ErrInputTooLong`, `ErrEmptyInput`, `ErrNoProvider`, `ErrEmptyResponse`, `ErrCanceled`, `ErrProvider`, `ErrNotSupported`.
+Sentinel errors: `ErrRateLimited`, `ErrServerError`, `ErrOverloaded`, `ErrTimeout`, `ErrInputTooLong`, `ErrEmptyInput`, `ErrNoProvider`, `ErrEmptyResponse`, `ErrCanceled`, `ErrProvider`, `ErrNotSupported`.
+
+`ErrRateLimited` (429), `ErrServerError` (5xx), `ErrOverloaded` (529), `ErrTimeout`, and `ErrEmptyResponse` are automatically retried when `WithMaxRetries()` is set.
 
 ## Feature Matrix
 
