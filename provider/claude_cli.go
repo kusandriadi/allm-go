@@ -20,12 +20,13 @@ import (
 // ClaudeCLIProvider implements allm.Provider using the claude CLI.
 type ClaudeCLIProvider struct {
 	model           string
-	cliPath         string  // path to claude binary (default: "claude")
-	effort          string  // effort level: low, medium, high, max (optional)
-	skipPermissions bool    // add --dangerously-skip-permissions (default: true)
-	fallbackModel   string  // --fallback-model for overload fallback (optional)
-	maxBudget       float64 // --max-budget-usd per request (0 = unlimited)
-	appendPrompt    string  // --append-system-prompt (optional)
+	cliPath         string   // path to claude binary (default: "claude")
+	effort          string   // effort level: low, medium, high, max (optional)
+	skipPermissions bool     // add --dangerously-skip-permissions (default: true)
+	fallbackModel   string   // --fallback-model for overload fallback (optional)
+	maxBudget       float64  // --max-budget-usd per request (0 = unlimited)
+	appendPrompt    string   // --append-system-prompt (optional)
+	allowedTools    []string // --allowedTools (empty = disable all tools)
 	logger          allm.Logger
 }
 
@@ -79,6 +80,14 @@ func WithCLIMaxBudget(budget float64) CLIOption {
 func WithCLIAppendPrompt(prompt string) CLIOption {
 	return func(p *ClaudeCLIProvider) {
 		p.appendPrompt = prompt
+	}
+}
+
+// WithCLIAllowedTools sets the list of allowed tools.
+// When set, uses --allowedTools instead of disabling all tools.
+func WithCLIAllowedTools(tools []string) CLIOption {
+	return func(p *ClaudeCLIProvider) {
+		p.allowedTools = tools
 	}
 }
 
@@ -226,8 +235,13 @@ func (p *ClaudeCLIProvider) buildArgs(req *allm.Request, outputFormat string) (a
 		args = append(args, "--max-budget-usd", fmt.Sprintf("%.2f", p.maxBudget))
 	}
 
-	// Disable tools — pure LLM mode
-	args = append(args, "--tools", "")
+	// Tool access control
+	if len(p.allowedTools) > 0 {
+		args = append(args, "--allowedTools", strings.Join(p.allowedTools, ","))
+	} else {
+		// Disable tools — pure LLM mode
+		args = append(args, "--tools", "")
+	}
 
 	// Extract system prompt and build conversation prompt
 	var systemParts []string
