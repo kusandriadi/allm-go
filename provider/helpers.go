@@ -129,10 +129,16 @@ func wrapOpenAIError(err error) error {
 
 // convertToOpenAI converts allm messages to OpenAI SDK format with image support.
 // Shared by all OpenAI-compatible providers (OpenAI, DeepSeek, Gemini, GLM, etc).
-func convertToOpenAI(msgs []allm.Message) []openai.ChatCompletionMessageParamUnion {
+// Returns an error if messages contain documents (OpenAI doesn't support native PDF).
+func convertToOpenAI(msgs []allm.Message) ([]openai.ChatCompletionMessageParamUnion, error) {
 	var messages []openai.ChatCompletionMessageParamUnion
 
 	for _, m := range msgs {
+		// OpenAI doesn't support native document input (e.g., PDF)
+		if len(m.Documents) > 0 {
+			return nil, fmt.Errorf("%w: document input (OpenAI doesn't support native PDF/document input)", allm.ErrNotSupported)
+		}
+
 		// Handle tool result messages
 		if m.Role == allm.RoleTool {
 			for _, tr := range m.ToolResults {
@@ -190,7 +196,7 @@ func convertToOpenAI(msgs []allm.Message) []openai.ChatCompletionMessageParamUni
 		}
 	}
 
-	return messages
+	return messages, nil
 }
 
 // convertToolsToOpenAI converts allm.Tool definitions to OpenAI SDK format.
@@ -248,6 +254,10 @@ func openaiChatParams(
 		Model:     openai.ChatModel(m),
 		Messages:  msgs,
 		MaxTokens: openai.Int(mt),
+		// Enable streaming usage stats
+		StreamOptions: openai.ChatCompletionStreamOptionsParam{
+			IncludeUsage: openai.Bool(true),
+		},
 	}
 
 	t := defaultTemp
@@ -349,12 +359,20 @@ func openaiCompleteResponse(
 func openaiStreamLoop(stream *ssestream.Stream[openai.ChatCompletionChunk], out chan<- allm.StreamChunk) {
 	defer stream.Close()
 
+	var usage *allm.StreamUsage
 	for stream.Next() {
 		chunk := stream.Current()
 		if len(chunk.Choices) > 0 {
 			content := chunk.Choices[0].Delta.Content
 			if content != "" {
 				out <- allm.StreamChunk{Content: content}
+			}
+		}
+		// Parse usage from final chunk (when stream_options.include_usage=true)
+		if chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0 {
+			usage = &allm.StreamUsage{
+				InputTokens:  int(chunk.Usage.PromptTokens),
+				OutputTokens: int(chunk.Usage.CompletionTokens),
 			}
 		}
 	}
@@ -364,7 +382,7 @@ func openaiStreamLoop(stream *ssestream.Stream[openai.ChatCompletionChunk], out 
 		return
 	}
 
-	out <- allm.StreamChunk{Done: true}
+	out <- allm.StreamChunk{Done: true, Usage: usage}
 }
 
 // openaiListModels lists models from an OpenAI-compatible API.
@@ -376,11 +394,30 @@ func openaiListModels(ctx context.Context, client openai.Client, providerName st
 
 	var models []allm.Model
 	for _, m := range page.Data {
-		models = append(models, allm.Model{
+		model := allm.Model{
 			ID:       m.ID,
 			Name:     m.ID,
 			Provider: providerName,
-		})
+		}
+		// Populate basic capabilities based on model ID patterns
+		if strings.Contains(m.ID, "gpt") {
+			model.Capabilities = []string{"chat", "streaming", "tools"}
+			if strings.Contains(m.ID, "vision") || strings.Contains(m.ID, "gpt-4") {
+				model.Capabilities = append(model.Capabilities, "vision")
+			}
+		} else if strings.Contains(m.ID, "embedding") {
+			model.Capabilities = []string{"embeddings"}
+		} else if strings.Contains(m.ID, "dall-e") {
+			model.Capabilities = []string{"image-generation"}
+		} else if strings.Contains(m.ID, "whisper") {
+			model.Capabilities = []string{"speech-to-text"}
+		} else if strings.Contains(m.ID, "tts") {
+			model.Capabilities = []string{"text-to-speech"}
+		}
+		if m.Created > 0 {
+			model.CreatedAt = m.Created
+		}
+		models = append(models, model)
 	}
 	return models, nil
 }

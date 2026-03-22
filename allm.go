@@ -38,7 +38,7 @@ import (
 )
 
 // Version of the allm-go library
-const Version = "0.8.0"
+const Version = "0.8.2"
 
 // Common errors
 var (
@@ -67,6 +67,7 @@ type Message struct {
 	Role         string        // "system", "user", "assistant", or "tool"
 	Content      string        // Text content
 	Images       []Image       // Optional images (for vision models)
+	Documents    []Document    // Optional documents (for document-aware models, e.g., PDF)
 	ToolCalls    []ToolCall    // Tool calls requested by assistant (role=assistant)
 	ToolResults  []ToolResult  // Tool results from user (role=tool)
 	CacheControl *CacheControl // Prompt caching control (Anthropic)
@@ -78,11 +79,25 @@ type Image struct {
 	Data     []byte // Raw image bytes (will be base64 encoded)
 }
 
+// Document represents a document (PDF, etc.) for document-aware models.
+type Document struct {
+	MimeType string // e.g., "application/pdf"
+	Data     []byte // Raw document bytes (will be base64 encoded)
+	Name     string // Optional filename
+}
+
 // Tool defines a function that the model can call.
 type Tool struct {
 	Name        string         // Function name (e.g., "get_weather")
 	Description string         // What the function does
 	Parameters  map[string]any // JSON Schema for parameters
+}
+
+// ComputerUseTool enables Anthropic's computer use capability.
+type ComputerUseTool struct {
+	DisplayWidth  int // Screen width in pixels
+	DisplayHeight int // Screen height in pixels
+	DisplayNumber int // X11 display number (optional)
 }
 
 // ToolCall represents a function call requested by the model.
@@ -231,42 +246,77 @@ type HookEvent struct {
 // Hook is a callback for observing client events.
 type Hook func(event HookEvent)
 
+// WebSearchTool enables built-in web search grounding.
+type WebSearchTool struct {
+	MaxResults int    // Max search results (0 = provider default)
+	Country    string // Country code for localized results
+}
+
+// SearchResult represents a web search result used by the model.
+type SearchResult struct {
+	Title   string // Result title
+	URL     string // Result URL
+	Snippet string // Result snippet/description
+}
+
 // Request contains parameters for an LLM request.
 type Request struct {
 	Messages         []Message
-	Model            string          // Model to use (empty = provider default)
-	MaxTokens        int             // Max tokens to generate (0 = provider default)
-	Temperature      float64         // Sampling temperature (0 = provider default)
-	TopP             float64         // Nucleus sampling (0 = provider default)
-	Stop             []string        // Stop sequences
-	PresencePenalty  float64         // Presence penalty (-2.0 to 2.0, 0 = default)
-	FrequencyPenalty float64         // Frequency penalty (-2.0 to 2.0, 0 = default)
-	Tools            []Tool          // Available tools the model can call
-	ResponseFormat   *ResponseFormat // Structured output format (JSON mode/schema)
-	Thinking         *ThinkingConfig // Extended thinking/reasoning config
+	Model            string           // Model to use (empty = provider default)
+	MaxTokens        int              // Max tokens to generate (0 = provider default)
+	Temperature      float64          // Sampling temperature (0 = provider default)
+	TopP             float64          // Nucleus sampling (0 = provider default)
+	Stop             []string         // Stop sequences
+	PresencePenalty  float64          // Presence penalty (-2.0 to 2.0, 0 = default)
+	FrequencyPenalty float64          // Frequency penalty (-2.0 to 2.0, 0 = default)
+	Tools            []Tool           // Available tools the model can call
+	ResponseFormat   *ResponseFormat  // Structured output format (JSON mode/schema)
+	Thinking         *ThinkingConfig  // Extended thinking/reasoning config
+	WebSearch        *WebSearchTool   // Enable built-in web search (provider-dependent)
+	ComputerUse      *ComputerUseTool // Enable computer use (Anthropic only)
+}
+
+// Citation represents a citation from the model's response.
+type Citation struct {
+	Type       string // "document", "web", "text"
+	Title      string
+	URL        string // for web citations
+	Content    string // cited text
+	DocumentID string // for document citations
+	StartIndex int    // character position
+	EndIndex   int
 }
 
 // Response contains the LLM response.
 type Response struct {
-	Content          string        // Generated text
-	ToolCalls        []ToolCall    // Tool calls requested by the model (when FinishReason is "tool_use" or "tool_calls")
-	Provider         string        // Provider name (e.g., "anthropic")
-	Model            string        // Model used (e.g., "claude-sonnet-4-20250514")
-	InputTokens      int           // Tokens in input
-	OutputTokens     int           // Tokens in output
-	Latency          time.Duration // Request latency
-	FinishReason     string        // Why generation stopped
-	Thinking         string        // Extended thinking/reasoning content
-	ThinkingTokens   int           // Tokens used for thinking
-	CacheReadTokens  int           // Tokens read from cache
-	CacheWriteTokens int           // Tokens written to cache
+	Content          string         // Generated text
+	Citations        []Citation     // Citations parsed from response (provider-dependent)
+	SearchResults    []SearchResult // Web search results used by the model (provider-dependent)
+	ToolCalls        []ToolCall     // Tool calls requested by the model (when FinishReason is "tool_use" or "tool_calls")
+	Provider         string         // Provider name (e.g., "anthropic")
+	Model            string         // Model used (e.g., "claude-sonnet-4-20250514")
+	InputTokens      int            // Tokens in input
+	OutputTokens     int            // Tokens in output
+	Latency          time.Duration  // Request latency
+	FinishReason     string         // Why generation stopped
+	Thinking         string         // Extended thinking/reasoning content
+	ThinkingTokens   int            // Tokens used for thinking
+	CacheReadTokens  int            // Tokens read from cache
+	CacheWriteTokens int            // Tokens written to cache
+}
+
+// StreamUsage contains token usage information from streaming responses.
+type StreamUsage struct {
+	InputTokens  int // Input tokens
+	OutputTokens int // Output tokens
 }
 
 // StreamChunk represents a chunk of streamed response.
 type StreamChunk struct {
-	Content string // Partial content
-	Done    bool   // True if this is the final chunk
-	Error   error  // Non-nil if streaming failed
+	Content string       // Partial content
+	Done    bool         // True if this is the final chunk
+	Error   error        // Non-nil if streaming failed
+	Usage   *StreamUsage // Token usage (non-nil only in final chunks, provider-dependent)
 }
 
 // EmbedRequest contains parameters for an embedding request.
@@ -339,11 +389,66 @@ type ImageGenerator interface {
 	GenerateImage(ctx context.Context, req *ImageRequest) (*ImageResponse, error)
 }
 
+// SpeechRequest represents a text-to-speech request.
+type SpeechRequest struct {
+	Input  string  // Text to speak
+	Model  string  // TTS model (e.g., "tts-1", "tts-1-hd")
+	Voice  string  // Voice name (e.g., "alloy", "echo", "fable", "onyx", "nova", "shimmer")
+	Format string  // Output format: "mp3", "opus", "aac", "flac", "wav", "pcm"
+	Speed  float64 // Speed 0.25-4.0 (1.0 = normal)
+}
+
+// SpeechResponse contains the result of text-to-speech.
+type SpeechResponse struct {
+	Audio    []byte        // Raw audio data
+	Format   string        // Audio format
+	Provider string        // Provider name
+	Model    string        // Model used
+	Latency  time.Duration // Request latency
+}
+
+// TranscribeRequest represents a speech-to-text request.
+type TranscribeRequest struct {
+	Audio    []byte // Raw audio data
+	Model    string // STT model (e.g., "whisper-1")
+	Language string // ISO language code (optional)
+	Format   string // Input format hint: "mp3", "wav", etc.
+	Prompt   string // Optional prompt for context
+}
+
+// TranscribeResponse contains the result of speech-to-text.
+type TranscribeResponse struct {
+	Text     string        // Transcribed text
+	Language string        // Detected language
+	Duration float64       // Audio duration in seconds
+	Provider string        // Provider name
+	Model    string        // Model used
+	Latency  time.Duration // Request latency
+}
+
+// Speaker is an optional interface for text-to-speech.
+// Supported by: OpenAI.
+type Speaker interface {
+	// Speak converts text to speech.
+	Speak(ctx context.Context, req *SpeechRequest) (*SpeechResponse, error)
+}
+
+// Transcriber is an optional interface for speech-to-text.
+// Supported by: OpenAI (Whisper).
+type Transcriber interface {
+	// Transcribe converts speech to text.
+	Transcribe(ctx context.Context, req *TranscribeRequest) (*TranscribeResponse, error)
+}
+
 // Model represents an available LLM model.
 type Model struct {
-	ID       string // Model identifier (e.g., "claude-sonnet-4-20250514")
-	Name     string // Human-readable name (e.g., "Claude Sonnet 4")
-	Provider string // Provider name
+	ID            string   // Model identifier (e.g., "claude-sonnet-4-20250514")
+	Name          string   // Human-readable name (e.g., "Claude Sonnet 4")
+	Provider      string   // Provider name
+	ContextWindow int      // Max input tokens (0 = unknown)
+	MaxOutput     int      // Max output tokens (0 = unknown)
+	Capabilities  []string // e.g., "vision", "tools", "streaming", "embeddings"
+	CreatedAt     int64    // Unix timestamp (0 = unknown)
 }
 
 // Option configures the Client.
@@ -614,10 +719,13 @@ func validateMessages(messages []Message, maxInputLen int) error {
 		for _, img := range m.Images {
 			totalLen += len(img.Data)
 		}
+		for _, doc := range m.Documents {
+			totalLen += len(doc.Data)
+		}
 		for _, tr := range m.ToolResults {
 			totalLen += len(tr.Content)
 		}
-		if m.Content != "" || len(m.Images) > 0 || len(m.ToolCalls) > 0 || len(m.ToolResults) > 0 {
+		if m.Content != "" || len(m.Images) > 0 || len(m.Documents) > 0 || len(m.ToolCalls) > 0 || len(m.ToolResults) > 0 {
 			hasContent = true
 		}
 	}
@@ -687,12 +795,13 @@ func classifyError(err error, ctx context.Context) error {
 }
 
 // requestMeta returns safe-to-log metadata about a request.
-// Never logs content, images, API keys, or anything sensitive.
+// Never logs content, images, documents, API keys, or anything sensitive.
 func requestMeta(messages []Message, s clientState) []any {
 	msgCount := len(messages)
-	var imageCount, toolResultCount int
+	var imageCount, documentCount, toolResultCount int
 	for _, m := range messages {
 		imageCount += len(m.Images)
+		documentCount += len(m.Documents)
 		toolResultCount += len(m.ToolResults)
 	}
 
@@ -704,6 +813,9 @@ func requestMeta(messages []Message, s clientState) []any {
 	}
 	if imageCount > 0 {
 		meta = append(meta, "images", imageCount)
+	}
+	if documentCount > 0 {
+		meta = append(meta, "documents", documentCount)
 	}
 	if len(s.tools) > 0 {
 		meta = append(meta, "tools", len(s.tools))
@@ -1354,4 +1466,69 @@ func (c *Client) GenerateImage(ctx context.Context, prompt string, opts ...Image
 	}
 
 	return generator.GenerateImage(ctx, req)
+}
+
+// Speak converts text to speech.
+// Returns an error if the provider does not support text-to-speech.
+func (c *Client) Speak(ctx context.Context, req *SpeechRequest) (*SpeechResponse, error) {
+	c.mu.RLock()
+	p := c.provider
+	logger := c.logger
+	c.mu.RUnlock()
+
+	if p == nil {
+		return nil, ErrNoProvider
+	}
+
+	speaker, ok := p.(Speaker)
+	if !ok {
+		return nil, fmt.Errorf("%w: text-to-speech", ErrNotSupported)
+	}
+
+	if req.Input == "" {
+		return nil, ErrEmptyInput
+	}
+
+	if logger != nil {
+		logger.Debug("speak request",
+			"provider", p.Name(),
+			"model", req.Model,
+			"voice", req.Voice,
+			"format", req.Format,
+		)
+	}
+
+	return speaker.Speak(ctx, req)
+}
+
+// Transcribe converts speech to text.
+// Returns an error if the provider does not support speech-to-text.
+func (c *Client) Transcribe(ctx context.Context, req *TranscribeRequest) (*TranscribeResponse, error) {
+	c.mu.RLock()
+	p := c.provider
+	logger := c.logger
+	c.mu.RUnlock()
+
+	if p == nil {
+		return nil, ErrNoProvider
+	}
+
+	transcriber, ok := p.(Transcriber)
+	if !ok {
+		return nil, fmt.Errorf("%w: speech-to-text", ErrNotSupported)
+	}
+
+	if len(req.Audio) == 0 {
+		return nil, ErrEmptyInput
+	}
+
+	if logger != nil {
+		logger.Debug("transcribe request",
+			"provider", p.Name(),
+			"model", req.Model,
+			"format", req.Format,
+		)
+	}
+
+	return transcriber.Transcribe(ctx, req)
 }

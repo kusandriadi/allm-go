@@ -194,6 +194,20 @@ func (p *AnthropicProvider) buildParams(req *allm.Request) (anthropic.MessageNew
 			parts = append(parts, anthropic.NewImageBlockBase64(img.MimeType, data))
 		}
 
+		for _, doc := range m.Documents {
+			data := base64.StdEncoding.EncodeToString(doc.Data)
+			// Anthropic supports PDF documents natively via document blocks
+			parts = append(parts, anthropic.ContentBlockParamUnion{
+				OfDocument: &anthropic.DocumentBlockParam{
+					Source: anthropic.DocumentBlockParamSourceUnion{
+						OfBase64: &anthropic.Base64PDFSourceParam{
+							Data: data,
+						},
+					},
+				},
+			})
+		}
+
 		// Handle assistant messages with tool calls
 		for _, tc := range m.ToolCalls {
 			var input map[string]any
@@ -268,6 +282,12 @@ func (p *AnthropicProvider) buildParams(req *allm.Request) (anthropic.MessageNew
 			})
 		}
 	}
+
+	// Computer use tool
+	// TODO: Implement computer use tool support via Beta API
+	// Computer use requires using BetaToolComputerUse20241022Param in the Beta API
+	// For now, ignore ComputerUse field (no error, just not implemented)
+	_ = req.ComputerUse
 
 	// Extended thinking / reasoning
 	if req.Thinking != nil && req.Thinking.BudgetTokens > 0 {
@@ -347,6 +367,9 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*a
 				Name:      block.Name,
 				Arguments: json.RawMessage(block.Input),
 			})
+			// TODO: Parse citation blocks when SDK exposes citation type
+			// case "citation":
+			//     resp.Citations = append(resp.Citations, allm.Citation{...})
 		}
 	}
 
@@ -441,11 +464,28 @@ func (p *AnthropicProvider) Models(ctx context.Context) ([]allm.Model, error) {
 
 	var models []allm.Model
 	for _, m := range page.Data {
-		models = append(models, allm.Model{
+		model := allm.Model{
 			ID:       m.ID,
 			Name:     m.DisplayName,
 			Provider: "anthropic",
-		})
+		}
+		// Populate metadata if available
+		if m.MaxInputTokens > 0 {
+			model.ContextWindow = int(m.MaxInputTokens)
+		}
+		if m.MaxTokens > 0 {
+			model.MaxOutput = int(m.MaxTokens)
+		}
+		// Populate capabilities based on model type
+		model.Capabilities = []string{"chat", "streaming"}
+		// Most Claude models support vision and tools
+		if m.ID != "" {
+			model.Capabilities = append(model.Capabilities, "vision", "tools")
+		}
+		if !m.CreatedAt.IsZero() {
+			model.CreatedAt = m.CreatedAt.Unix()
+		}
+		models = append(models, model)
 	}
 	return models, nil
 }
@@ -479,11 +519,26 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *allm.Request) <-cha
 		stream := p.client.Messages.NewStreaming(ctx, params)
 		defer stream.Close()
 
+		var usage *allm.StreamUsage
 		for stream.Next() {
 			event := stream.Current()
 			// content_block_delta events contain text chunks
 			if event.Type == "content_block_delta" && event.Delta.Text != "" {
 				out <- allm.StreamChunk{Content: event.Delta.Text}
+			}
+			// message_delta events contain usage information
+			if event.Type == "message_delta" && event.Usage.OutputTokens > 0 {
+				if usage == nil {
+					usage = &allm.StreamUsage{}
+				}
+				usage.OutputTokens = int(event.Usage.OutputTokens)
+			}
+			// message_start events contain input token count
+			if event.Type == "message_start" && event.Message.Usage.InputTokens > 0 {
+				if usage == nil {
+					usage = &allm.StreamUsage{}
+				}
+				usage.InputTokens = int(event.Message.Usage.InputTokens)
 			}
 		}
 
@@ -492,7 +547,7 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *allm.Request) <-cha
 			return
 		}
 
-		out <- allm.StreamChunk{Done: true}
+		out <- allm.StreamChunk{Done: true, Usage: usage}
 	}()
 
 	return out

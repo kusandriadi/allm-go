@@ -237,7 +237,10 @@ func (p *OpenAICompatibleProvider) Complete(ctx context.Context, req *allm.Reque
 		)
 	}
 
-	messages := convertToOpenAI(req.Messages)
+	messages, err := convertToOpenAI(req.Messages)
+	if err != nil {
+		return nil, err
+	}
 	params := openaiChatParams(messages, p.model, p.maxTokens, p.temperature, req)
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)
@@ -284,7 +287,11 @@ func (p *OpenAICompatibleProvider) Stream(ctx context.Context, req *allm.Request
 			)
 		}
 
-		messages := convertToOpenAI(req.Messages)
+		messages, err := convertToOpenAI(req.Messages)
+		if err != nil {
+			out <- allm.StreamChunk{Error: err}
+			return
+		}
 		params := openaiChatParams(messages, p.model, p.maxTokens, p.temperature, req)
 
 		stream := p.client.Chat.Completions.NewStreaming(ctx, params)

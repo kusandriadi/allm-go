@@ -1,8 +1,10 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -105,7 +107,10 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *allm.Request) (*allm
 		)
 	}
 
-	messages := convertToOpenAI(req.Messages)
+	messages, err := convertToOpenAI(req.Messages)
+	if err != nil {
+		return nil, err
+	}
 	params := openaiChatParams(messages, p.model, p.maxTokens, p.temperature, req)
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)
@@ -160,7 +165,11 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *allm.Request) <-chan a
 			)
 		}
 
-		messages := convertToOpenAI(req.Messages)
+		messages, err := convertToOpenAI(req.Messages)
+		if err != nil {
+			out <- allm.StreamChunk{Error: err}
+			return
+		}
 		params := openaiChatParams(messages, p.model, p.maxTokens, p.temperature, req)
 
 		stream := p.client.Chat.Completions.NewStreaming(ctx, params)
@@ -252,6 +261,148 @@ func (p *OpenAIProvider) CreateBatch(ctx context.Context, requests []allm.BatchR
 func (p *OpenAIProvider) GetBatch(ctx context.Context, batchID string) (*allm.Batch, error) {
 	// TODO: Implement batch retrieval
 	return nil, fmt.Errorf("openai: batch API not yet implemented")
+}
+
+// Speak converts text to speech using OpenAI TTS.
+func (p *OpenAIProvider) Speak(ctx context.Context, req *allm.SpeechRequest) (*allm.SpeechResponse, error) {
+	start := time.Now()
+
+	model := "tts-1"
+	if req.Model != "" {
+		model = req.Model
+	}
+
+	voice := "alloy"
+	if req.Voice != "" {
+		voice = req.Voice
+	}
+
+	if p.logger != nil {
+		p.logger.Debug("provider speak",
+			"provider", "openai",
+			"model", model,
+			"voice", voice,
+		)
+	}
+
+	params := openai.AudioSpeechNewParams{
+		Model: openai.SpeechModel(model),
+		Input: req.Input,
+		Voice: openai.AudioSpeechNewParamsVoiceUnion{
+			OfString: openai.String(voice),
+		},
+	}
+
+	if req.Format != "" {
+		params.ResponseFormat = openai.AudioSpeechNewParamsResponseFormat(req.Format)
+	}
+	if req.Speed > 0 {
+		params.Speed = openai.Float(req.Speed)
+	}
+
+	httpResp, err := p.client.Audio.Speech.New(ctx, params)
+	if err != nil {
+		if p.logger != nil {
+			p.logger.Debug("provider speak failed",
+				"provider", "openai",
+				"model", model,
+				"error", sanitizeProviderError(err),
+			)
+		}
+		return nil, wrapOpenAIError(err)
+	}
+	defer httpResp.Body.Close()
+
+	// Read audio data
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, httpResp.Body); err != nil {
+		return nil, fmt.Errorf("openai: failed to read audio data: %w", err)
+	}
+
+	format := req.Format
+	if format == "" {
+		format = "mp3" // OpenAI default
+	}
+
+	result := &allm.SpeechResponse{
+		Audio:    buf.Bytes(),
+		Format:   format,
+		Provider: "openai",
+		Model:    model,
+		Latency:  time.Since(start),
+	}
+
+	if p.logger != nil {
+		p.logger.Debug("provider speak done",
+			"provider", "openai",
+			"model", model,
+			"latency", result.Latency,
+			"bytes", len(result.Audio),
+		)
+	}
+
+	return result, nil
+}
+
+// Transcribe converts speech to text using OpenAI Whisper.
+func (p *OpenAIProvider) Transcribe(ctx context.Context, req *allm.TranscribeRequest) (*allm.TranscribeResponse, error) {
+	start := time.Now()
+
+	model := "whisper-1"
+	if req.Model != "" {
+		model = req.Model
+	}
+
+	if p.logger != nil {
+		p.logger.Debug("provider transcribe",
+			"provider", "openai",
+			"model", model,
+			"format", req.Format,
+		)
+	}
+
+	// OpenAI SDK expects an io.Reader for the file
+	params := openai.AudioTranscriptionNewParams{
+		Model: openai.AudioModel(model),
+		File:  bytes.NewReader(req.Audio),
+	}
+
+	if req.Language != "" {
+		params.Language = openai.String(req.Language)
+	}
+	if req.Prompt != "" {
+		params.Prompt = openai.String(req.Prompt)
+	}
+
+	transcription, err := p.client.Audio.Transcriptions.New(ctx, params)
+	if err != nil {
+		if p.logger != nil {
+			p.logger.Debug("provider transcribe failed",
+				"provider", "openai",
+				"model", model,
+				"error", sanitizeProviderError(err),
+			)
+		}
+		return nil, wrapOpenAIError(err)
+	}
+
+	result := &allm.TranscribeResponse{
+		Text:     transcription.Text,
+		Language: req.Language, // OpenAI doesn't return detected language in basic response
+		Provider: "openai",
+		Model:    model,
+		Latency:  time.Since(start),
+	}
+
+	if p.logger != nil {
+		p.logger.Debug("provider transcribe done",
+			"provider", "openai",
+			"model", model,
+			"latency", result.Latency,
+		)
+	}
+
+	return result, nil
 }
 
 func (p *OpenAIProvider) buildClient() openai.Client {

@@ -9,7 +9,7 @@ allm.go              # Core client, types, interfaces, options
 names.go             # ProviderName constants
 validation.go        # Input validation, error sanitization
 retry.go             # Retry with exponential backoff
-features_test.go     # Tests for v0.8.0 features (structured output, thinking, etc.)
+features_test.go     # Tests for v0.9.0 features (PDF, citations, audio, etc.)
 provider/
   anthropic.go       # Anthropic Claude (native SDK) — thinking, caching, token counting
   openai.go          # OpenAI GPT (native SDK) — image generation, batch stubs
@@ -36,6 +36,8 @@ Embedder       // Optional: text embeddings
 TokenCounter   // Optional: pre-request token counting (Anthropic)
 BatchProvider  // Optional: batch processing
 ImageGenerator // Optional: image generation (OpenAI)
+Speaker        // Optional: text-to-speech (OpenAI)
+Transcriber    // Optional: speech-to-text (OpenAI)
 ```
 
 ## Health Check

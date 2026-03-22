@@ -17,6 +17,13 @@ fmt.Println(resp.Content)
 - **10 providers** — Anthropic, OpenAI, DeepSeek, Gemini, GLM, Kimi, Qwen, MiniMax, Local (Ollama/vLLM), Claude CLI
 - **Any OpenAI-compatible API** via `OpenAICompatible()` — add new providers in one line
 - **Chat, streaming, vision, embeddings, tool use** — same API across all providers
+- **PDF/Document input** — send PDFs and documents to models that support them (Anthropic)
+- **Citations** — extract citations from model responses (Anthropic)
+- **Audio TTS/STT** — text-to-speech and speech-to-text (OpenAI Whisper/TTS)
+- **Streaming token usage** — get token counts in streaming responses
+- **Model metadata** — context window, max output, capabilities in model listings
+- **Web search grounding** — built-in web search tool (provider-dependent)
+- **Computer use** — tool definitions for Anthropic's computer use capability
 - **Structured output** — JSON mode and JSON Schema for guaranteed structured responses
 - **Extended thinking** — reasoning/chain-of-thought with budget control (Anthropic, DeepSeek)
 - **Prompt caching** — reduce costs with Anthropic's cache control
@@ -215,6 +222,69 @@ resp, _ := client.Chat(ctx, []allm.Message{
 
 // Embeddings (OpenAI, GLM, Qwen, Local)
 resp, _ := client.Embed(ctx, "Hello world")
+```
+
+## PDF/Document Input
+
+Send PDFs and documents to models that support them (Anthropic):
+
+```go
+pdfBytes, _ := os.ReadFile("document.pdf")
+resp, _ := client.Chat(ctx, []allm.Message{
+    {Role: allm.RoleUser, Content: "Summarize this document",
+     Documents: []allm.Document{{MimeType: "application/pdf", Data: pdfBytes, Name: "document.pdf"}}},
+})
+```
+
+## Audio (TTS/STT)
+
+Text-to-speech and speech-to-text with OpenAI:
+
+```go
+// Text-to-speech
+resp, _ := client.Speak(ctx, &allm.SpeechRequest{
+    Input:  "Hello, this is a test",
+    Model:  "tts-1-hd",
+    Voice:  "alloy",
+    Format: "mp3",
+})
+os.WriteFile("output.mp3", resp.Audio, 0644)
+
+// Speech-to-text (Whisper)
+audioBytes, _ := os.ReadFile("audio.mp3")
+resp, _ := client.Transcribe(ctx, &allm.TranscribeRequest{
+    Audio:    audioBytes,
+    Model:    "whisper-1",
+    Language: "en",
+})
+fmt.Println("Transcription:", resp.Text)
+```
+
+## Citations
+
+Extract citations from model responses (Anthropic):
+
+```go
+resp, _ := client.Complete(ctx, "Tell me about climate change with sources")
+for _, cite := range resp.Citations {
+    fmt.Printf("Citation: %s - %s\n", cite.Title, cite.URL)
+}
+```
+
+## Streaming with Token Usage
+
+Get token counts in streaming responses:
+
+```go
+for chunk := range client.Stream(ctx, messages) {
+    if chunk.Error != nil {
+        log.Fatal(chunk.Error)
+    }
+    fmt.Print(chunk.Content)
+    if chunk.Done && chunk.Usage != nil {
+        fmt.Printf("\nTokens: input=%d output=%d\n", chunk.Usage.InputTokens, chunk.Usage.OutputTokens)
+    }
+}
 ```
 
 ## Image Generation

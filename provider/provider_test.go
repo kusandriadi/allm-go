@@ -341,7 +341,10 @@ func TestConvertToOpenAI(t *testing.T) {
 		{Role: allm.RoleAssistant, Content: "Hi there!"},
 	}
 
-	result := convertToOpenAI(msgs)
+	result, err := convertToOpenAI(msgs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(result) != 3 {
 		t.Fatalf("expected 3 messages, got %d", len(result))
 	}
@@ -369,7 +372,10 @@ func TestConvertToOpenAIToolCalls(t *testing.T) {
 		},
 	}
 
-	result := convertToOpenAI(msgs)
+	result, err := convertToOpenAI(msgs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(result) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(result))
 	}
@@ -395,7 +401,10 @@ func TestConvertToOpenAIToolResults(t *testing.T) {
 		},
 	}
 
-	result := convertToOpenAI(msgs)
+	result, err := convertToOpenAI(msgs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	// Each tool result becomes a separate tool message
 	if len(result) != 2 {
 		t.Fatalf("expected 2 tool messages, got %d", len(result))
