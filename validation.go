@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Input validation constants
@@ -54,8 +55,20 @@ const (
 	MaxRetryMaxDelay = 5 * time.Minute
 )
 
-// Allowed image MIME types for vision.
-var allowedImageMIMETypes = map[string]bool{
+// SanitizeInput removes potentially dangerous control characters from input text.
+// It preserves newlines (\n), tabs (\t), and carriage returns (\r).
+func SanitizeInput(s string) string {
+	s = strings.ReplaceAll(s, "\x00", "")
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' && r != '\r' {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// AllowedImageMIMETypes is the set of accepted image MIME types for vision.
+var AllowedImageMIMETypes = map[string]bool{
 	"image/jpeg": true,
 	"image/png":  true,
 	"image/gif":  true,
@@ -122,7 +135,7 @@ func validateRequest(req *Request) error {
 			if img.MimeType == "" {
 				return fmt.Errorf("image %d has empty MIME type", j)
 			}
-			if !allowedImageMIMETypes[strings.ToLower(img.MimeType)] {
+			if !AllowedImageMIMETypes[strings.ToLower(img.MimeType)] {
 				return fmt.Errorf("image %d has unsupported MIME type: %s (allowed: jpeg, png, gif, webp)", j, img.MimeType)
 			}
 			if len(img.Data) == 0 {

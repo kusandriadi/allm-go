@@ -27,6 +27,7 @@ package allm
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,7 +39,7 @@ import (
 )
 
 // Version of the allm-go library
-const Version = "0.8.3"
+const Version = "0.8.7"
 
 // Common errors
 var (
@@ -77,6 +78,24 @@ type Message struct {
 type Image struct {
 	MimeType string // e.g., "image/jpeg", "image/png"
 	Data     []byte // Raw image bytes (will be base64 encoded)
+}
+
+// ImageFromBase64 creates an Image from a base64-encoded string.
+// Only image/jpeg, image/png, image/gif, image/webp MIME types are accepted.
+func ImageFromBase64(mimeType, base64Data string) (Image, error) {
+	if !AllowedImageMIMETypes[mimeType] {
+		return Image{}, fmt.Errorf("unsupported image MIME type: %s", mimeType)
+	}
+	data, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return Image{}, fmt.Errorf("decode base64: %w", err)
+	}
+	return Image{MimeType: mimeType, Data: data}, nil
+}
+
+// ImageFromBytes creates an Image from raw bytes and MIME type.
+func ImageFromBytes(mimeType string, data []byte) Image {
+	return Image{MimeType: mimeType, Data: data}
 }
 
 // Document represents a document (PDF, etc.) for document-aware models.
@@ -689,6 +708,14 @@ type Client struct {
 	logProbs           bool            // enable log probabilities
 	topLogProbs        int             // number of top log probs per token
 	seed               *int64          // seed for deterministic output
+	usage              UsageStats      // cumulative usage tracking
+}
+
+// UsageStats tracks cumulative LLM usage since client creation.
+type UsageStats struct {
+	Requests     int64 // Total number of requests
+	InputTokens  int64 // Total input tokens consumed
+	OutputTokens int64 // Total output tokens generated
 }
 
 // clientState holds a snapshot of client fields for use without holding the lock.
@@ -1036,9 +1063,17 @@ func (c *Client) Chat(ctx context.Context, messages []Message) (*Response, error
 		return nil, fmt.Errorf("invalid request: %w", err)
 	}
 
-	return retryWithBackoff(ctx, s, func(attemptCtx context.Context) (*Response, error) {
+	resp, err := retryWithBackoff(ctx, s, func(attemptCtx context.Context) (*Response, error) {
 		return s.provider.Complete(attemptCtx, req)
 	}, "chat")
+	if err == nil && resp != nil {
+		c.mu.Lock()
+		c.usage.Requests++
+		c.usage.InputTokens += int64(resp.InputTokens)
+		c.usage.OutputTokens += int64(resp.OutputTokens)
+		c.mu.Unlock()
+	}
+	return resp, err
 }
 
 // Stream sends a request and streams the response.
@@ -1247,6 +1282,20 @@ func (c *Client) SetModel(model string) {
 	c.mu.Lock()
 	c.model = model
 	c.mu.Unlock()
+}
+
+// Model returns the current model name.
+func (c *Client) Model() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.model
+}
+
+// Usage returns cumulative usage stats since client creation.
+func (c *Client) Usage() UsageStats {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.usage
 }
 
 // SetSystemPrompt updates the system prompt.

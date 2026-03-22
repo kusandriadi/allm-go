@@ -20,9 +20,12 @@ import (
 // ClaudeCLIProvider implements allm.Provider using the claude CLI.
 type ClaudeCLIProvider struct {
 	model           string
-	cliPath         string // path to claude binary (default: "claude")
-	effort          string // effort level: low, medium, high (optional)
-	skipPermissions bool   // add --dangerously-skip-permissions (default: true)
+	cliPath         string  // path to claude binary (default: "claude")
+	effort          string  // effort level: low, medium, high, max (optional)
+	skipPermissions bool    // add --dangerously-skip-permissions (default: true)
+	fallbackModel   string  // --fallback-model for overload fallback (optional)
+	maxBudget       float64 // --max-budget-usd per request (0 = unlimited)
+	appendPrompt    string  // --append-system-prompt (optional)
 	logger          allm.Logger
 }
 
@@ -55,6 +58,27 @@ func WithCLIEffort(effort string) CLIOption {
 func WithCLISkipPermissions(skip bool) CLIOption {
 	return func(p *ClaudeCLIProvider) {
 		p.skipPermissions = skip
+	}
+}
+
+// WithCLIFallbackModel sets a fallback model for when the primary is overloaded.
+func WithCLIFallbackModel(model string) CLIOption {
+	return func(p *ClaudeCLIProvider) {
+		p.fallbackModel = model
+	}
+}
+
+// WithCLIMaxBudget sets the max budget in USD per request (0 = unlimited).
+func WithCLIMaxBudget(budget float64) CLIOption {
+	return func(p *ClaudeCLIProvider) {
+		p.maxBudget = budget
+	}
+}
+
+// WithCLIAppendPrompt sets text appended to the system prompt via --append-system-prompt.
+func WithCLIAppendPrompt(prompt string) CLIOption {
+	return func(p *ClaudeCLIProvider) {
+		p.appendPrompt = prompt
 	}
 }
 
@@ -117,6 +141,30 @@ func (p *ClaudeCLIProvider) Available() bool {
 	return err == nil
 }
 
+// SetEffort sets the effort level at runtime.
+func (p *ClaudeCLIProvider) SetEffort(effort string) { p.effort = effort }
+
+// Effort returns the current effort level.
+func (p *ClaudeCLIProvider) Effort() string { return p.effort }
+
+// SetFallbackModel sets the fallback model at runtime.
+func (p *ClaudeCLIProvider) SetFallbackModel(model string) { p.fallbackModel = model }
+
+// FallbackModel returns the current fallback model.
+func (p *ClaudeCLIProvider) FallbackModel() string { return p.fallbackModel }
+
+// SetMaxBudget sets the max budget per request at runtime.
+func (p *ClaudeCLIProvider) SetMaxBudget(budget float64) { p.maxBudget = budget }
+
+// MaxBudget returns the current max budget.
+func (p *ClaudeCLIProvider) MaxBudget() float64 { return p.maxBudget }
+
+// SetAppendPrompt sets the appended system prompt at runtime.
+func (p *ClaudeCLIProvider) SetAppendPrompt(prompt string) { p.appendPrompt = prompt }
+
+// AppendPrompt returns the current appended system prompt.
+func (p *ClaudeCLIProvider) AppendPrompt() string { return p.appendPrompt }
+
 // cliResult represents the JSON output from claude CLI (--output-format json).
 type cliResult struct {
 	Type       string  `json:"type"`
@@ -168,6 +216,16 @@ func (p *ClaudeCLIProvider) buildArgs(req *allm.Request, outputFormat string) (a
 		args = append(args, "--effort", p.effort)
 	}
 
+	// Fallback model
+	if p.fallbackModel != "" {
+		args = append(args, "--fallback-model", p.fallbackModel)
+	}
+
+	// Max budget
+	if p.maxBudget > 0 {
+		args = append(args, "--max-budget-usd", fmt.Sprintf("%.2f", p.maxBudget))
+	}
+
 	// Disable tools — pure LLM mode
 	args = append(args, "--tools", "")
 
@@ -188,6 +246,11 @@ func (p *ClaudeCLIProvider) buildArgs(req *allm.Request, outputFormat string) (a
 
 	if len(systemParts) > 0 {
 		args = append(args, "--system-prompt", strings.Join(systemParts, "\n\n"))
+	}
+
+	// Append system prompt (additional instructions)
+	if p.appendPrompt != "" {
+		args = append(args, "--append-system-prompt", p.appendPrompt)
 	}
 
 	// Build prompt: if single user message, pass directly; if multi-turn, format conversation
@@ -368,6 +431,9 @@ func (p *ClaudeCLIProvider) Stream(ctx context.Context, req *allm.Request) <-cha
 // The CLI doesn't provide a model listing endpoint.
 func (p *ClaudeCLIProvider) Models(_ context.Context) ([]allm.Model, error) {
 	models := []allm.Model{
+		{ID: "claude-opus-4-6", Name: "Claude Opus 4.6", Provider: "claude-cli"},
+		{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6", Provider: "claude-cli"},
+		{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5", Provider: "claude-cli"},
 		{ID: "claude-opus-4-20250514", Name: "Claude Opus 4", Provider: "claude-cli"},
 		{ID: "claude-sonnet-4-20250514", Name: "Claude Sonnet 4", Provider: "claude-cli"},
 		{ID: "claude-sonnet-4-5-20250929", Name: "Claude Sonnet 4.5", Provider: "claude-cli"},
