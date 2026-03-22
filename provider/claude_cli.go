@@ -19,10 +19,11 @@ import (
 
 // ClaudeCLIProvider implements allm.Provider using the claude CLI.
 type ClaudeCLIProvider struct {
-	model   string
-	cliPath string // path to claude binary (default: "claude")
-	effort  string // effort level: low, medium, high (optional)
-	logger  allm.Logger
+	model           string
+	cliPath         string // path to claude binary (default: "claude")
+	effort          string // effort level: low, medium, high (optional)
+	skipPermissions bool   // add --dangerously-skip-permissions (default: true)
+	logger          allm.Logger
 }
 
 // CLIOption configures the ClaudeCLI provider.
@@ -49,6 +50,14 @@ func WithCLIEffort(effort string) CLIOption {
 	}
 }
 
+// WithCLISkipPermissions controls the --dangerously-skip-permissions flag.
+// When true (default), the flag is added to bypass permission prompts.
+func WithCLISkipPermissions(skip bool) CLIOption {
+	return func(p *ClaudeCLIProvider) {
+		p.skipPermissions = skip
+	}
+}
+
 // WithCLILogger sets a logger for provider-level debug tracing.
 func WithCLILogger(logger allm.Logger) CLIOption {
 	return func(p *ClaudeCLIProvider) {
@@ -62,8 +71,9 @@ func WithCLILogger(logger allm.Logger) CLIOption {
 // or an absolute path to a trusted binary.
 func ClaudeCLI(opts ...CLIOption) *ClaudeCLIProvider {
 	p := &ClaudeCLIProvider{
-		model:   "claude-sonnet-4-20250514",
-		cliPath: "claude",
+		model:           "claude-sonnet-4-20250514",
+		cliPath:         "claude",
+		skipPermissions: true,
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -137,6 +147,10 @@ type cliStreamMessage struct {
 // buildArgs constructs claude CLI arguments from a request.
 func (p *ClaudeCLIProvider) buildArgs(req *allm.Request, outputFormat string) (args []string, prompt string) {
 	args = []string{"-p", "--output-format", outputFormat, "--no-session-persistence"}
+
+	if p.skipPermissions {
+		args = append(args, "--dangerously-skip-permissions")
+	}
 
 	if outputFormat == "stream-json" {
 		args = append(args, "--verbose", "--include-partial-messages")

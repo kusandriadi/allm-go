@@ -20,6 +20,9 @@ func TestClaudeCLINew(t *testing.T) {
 	if p.cliPath != "claude" {
 		t.Errorf("expected default cli path 'claude', got %q", p.cliPath)
 	}
+	if !p.skipPermissions {
+		t.Error("expected skipPermissions to default to true")
+	}
 }
 
 func TestClaudeCLIWithOptions(t *testing.T) {
@@ -83,6 +86,9 @@ func TestClaudeCLIBuildArgs(t *testing.T) {
 	if !hasFlag("--no-session-persistence") {
 		t.Error("missing --no-session-persistence flag")
 	}
+	if !hasFlag("--dangerously-skip-permissions") {
+		t.Error("missing --dangerously-skip-permissions flag (default true)")
+	}
 	if prompt != "Hello" {
 		t.Errorf("expected prompt 'Hello', got %q", prompt)
 	}
@@ -118,6 +124,27 @@ func TestClaudeCLIBuildArgs(t *testing.T) {
 	}
 	if !foundEffort {
 		t.Error("effort not set in args")
+	}
+}
+
+func TestClaudeCLISkipPermissionsDisabled(t *testing.T) {
+	p := ClaudeCLI(WithCLISkipPermissions(false))
+
+	if p.skipPermissions {
+		t.Error("expected skipPermissions to be false")
+	}
+
+	req := &allm.Request{
+		Messages: []allm.Message{
+			{Role: allm.RoleUser, Content: "Hi"},
+		},
+	}
+
+	args, _ := p.buildArgs(req, "json")
+	for _, a := range args {
+		if a == "--dangerously-skip-permissions" {
+			t.Error("--dangerously-skip-permissions should not be present when disabled")
+		}
 	}
 }
 
