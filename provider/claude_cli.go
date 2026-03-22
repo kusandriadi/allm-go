@@ -26,7 +26,7 @@ type ClaudeCLIProvider struct {
 	fallbackModel   string   // --fallback-model for overload fallback (optional)
 	maxBudget       float64  // --max-budget-usd per request (0 = unlimited)
 	appendPrompt    string   // --append-system-prompt (optional)
-	allowedTools    []string // --allowedTools (empty = disable all tools)
+	allowedTools    []string // --tools whitelist (empty = disable all tools)
 	logger          allm.Logger
 }
 
@@ -235,9 +235,10 @@ func (p *ClaudeCLIProvider) buildArgs(req *allm.Request, outputFormat string) (a
 		args = append(args, "--max-budget-usd", fmt.Sprintf("%.2f", p.maxBudget))
 	}
 
-	// Tool access control
+	// Tool access control: --tools sets which tools are loaded (not just permitted).
+	// This is more secure than --allowedTools which is only a permission filter.
 	if len(p.allowedTools) > 0 {
-		args = append(args, "--allowedTools", strings.Join(p.allowedTools, ","))
+		args = append(args, "--tools", strings.Join(p.allowedTools, ","))
 	} else {
 		// Disable tools — pure LLM mode
 		args = append(args, "--tools", "")
