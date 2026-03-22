@@ -160,6 +160,16 @@ func validateRequest(req *Request) error {
 		}
 	}
 
+	// Validate LogProbs
+	if req.TopLogProbs < 0 || req.TopLogProbs > 20 {
+		return fmt.Errorf("top_log_probs must be between 0 and 20")
+	}
+
+	// Validate ParallelToolCalls (only if tools are provided)
+	// ParallelToolCalls is allowed even without tools — the provider will ignore it
+	// No validation needed here
+	_ = req.ParallelToolCalls
+
 	return nil
 }
 

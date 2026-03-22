@@ -307,6 +307,33 @@ func openaiChatParams(
 		}
 	}
 
+	// Log probabilities
+	if req.LogProbs {
+		params.Logprobs = openai.Bool(true)
+		if req.TopLogProbs > 0 {
+			params.TopLogprobs = openai.Int(int64(req.TopLogProbs))
+		}
+	}
+
+	// Seed for deterministic output
+	if req.Seed != nil {
+		params.Seed = openai.Int(*req.Seed)
+	}
+
+	// Parallel tool calls control
+	if req.ParallelToolCalls != nil && len(req.Tools) > 0 {
+		params.ParallelToolCalls = openai.Bool(*req.ParallelToolCalls)
+	}
+
+	// Predicted output for editing use cases
+	if req.Prediction != nil {
+		params.Prediction = openai.ChatCompletionPredictionContentParam{
+			Content: openai.ChatCompletionPredictionContentContentUnionParam{
+				OfString: openai.String(req.Prediction.Content),
+			},
+		}
+	}
+
 	return params
 }
 
@@ -337,6 +364,44 @@ func openaiCompleteResponse(
 		OutputTokens: int(completion.Usage.CompletionTokens),
 		Latency:      time.Since(start),
 		FinishReason: string(completion.Choices[0].FinishReason),
+	}
+
+	// System fingerprint for reproducibility
+	// Note: OpenAI SDK marked this as deprecated, but it's still part of the API response
+	//nolint:staticcheck // SystemFingerprint is used for reproducibility tracking
+	if completion.SystemFingerprint != "" {
+		//nolint:staticcheck // SystemFingerprint is used for reproducibility tracking
+		resp.SystemFingerprint = completion.SystemFingerprint
+	}
+
+	// Request ID (OpenAI SDK may not expose this directly via the completion object)
+	// TODO: Check if OpenAI SDK provides request ID in response headers
+	// For now, leave empty — would require access to response headers
+
+	// Parse log probabilities
+	if completion.Choices[0].Logprobs.Content != nil {
+		for _, logprobContent := range completion.Choices[0].Logprobs.Content {
+			tokenLogProb := allm.TokenLogProb{
+				Token:   logprobContent.Token,
+				LogProb: logprobContent.Logprob,
+			}
+			for _, topLogprob := range logprobContent.TopLogprobs {
+				// Convert []int64 to []byte
+				var bytes []byte
+				if topLogprob.Bytes != nil {
+					bytes = make([]byte, len(topLogprob.Bytes))
+					for i, b := range topLogprob.Bytes {
+						bytes[i] = byte(b)
+					}
+				}
+				tokenLogProb.TopLogProbs = append(tokenLogProb.TopLogProbs, allm.LogProb{
+					Token:   topLogprob.Token,
+					LogProb: topLogprob.Logprob,
+					Bytes:   bytes,
+				})
+			}
+			resp.LogProbs = append(resp.LogProbs, tokenLogProb)
+		}
 	}
 
 	// Extract reasoning content for DeepSeek Reasoner models

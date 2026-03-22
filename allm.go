@@ -38,7 +38,7 @@ import (
 )
 
 // Version of the allm-go library
-const Version = "0.8.2"
+const Version = "0.8.3"
 
 // Common errors
 var (
@@ -252,6 +252,25 @@ type WebSearchTool struct {
 	Country    string // Country code for localized results
 }
 
+// LogProb represents a token with its log probability.
+type LogProb struct {
+	Token   string  // The token
+	LogProb float64 // Log probability
+	Bytes   []byte  // UTF-8 bytes of the token (optional)
+}
+
+// TokenLogProb contains log probability information for a single token.
+type TokenLogProb struct {
+	Token       string    // The token
+	LogProb     float64   // Log probability of this token
+	TopLogProbs []LogProb // Top alternative tokens with their log probs
+}
+
+// PredictedOutput contains the predicted/expected output for editing use cases.
+type PredictedOutput struct {
+	Content string // The predicted/expected output text
+}
+
 // SearchResult represents a web search result used by the model.
 type SearchResult struct {
 	Title   string // Result title
@@ -261,19 +280,24 @@ type SearchResult struct {
 
 // Request contains parameters for an LLM request.
 type Request struct {
-	Messages         []Message
-	Model            string           // Model to use (empty = provider default)
-	MaxTokens        int              // Max tokens to generate (0 = provider default)
-	Temperature      float64          // Sampling temperature (0 = provider default)
-	TopP             float64          // Nucleus sampling (0 = provider default)
-	Stop             []string         // Stop sequences
-	PresencePenalty  float64          // Presence penalty (-2.0 to 2.0, 0 = default)
-	FrequencyPenalty float64          // Frequency penalty (-2.0 to 2.0, 0 = default)
-	Tools            []Tool           // Available tools the model can call
-	ResponseFormat   *ResponseFormat  // Structured output format (JSON mode/schema)
-	Thinking         *ThinkingConfig  // Extended thinking/reasoning config
-	WebSearch        *WebSearchTool   // Enable built-in web search (provider-dependent)
-	ComputerUse      *ComputerUseTool // Enable computer use (Anthropic only)
+	Messages          []Message
+	Model             string           // Model to use (empty = provider default)
+	MaxTokens         int              // Max tokens to generate (0 = provider default)
+	Temperature       float64          // Sampling temperature (0 = provider default)
+	TopP              float64          // Nucleus sampling (0 = provider default)
+	Stop              []string         // Stop sequences
+	PresencePenalty   float64          // Presence penalty (-2.0 to 2.0, 0 = default)
+	FrequencyPenalty  float64          // Frequency penalty (-2.0 to 2.0, 0 = default)
+	Tools             []Tool           // Available tools the model can call
+	ResponseFormat    *ResponseFormat  // Structured output format (JSON mode/schema)
+	Thinking          *ThinkingConfig  // Extended thinking/reasoning config
+	WebSearch         *WebSearchTool   // Enable built-in web search (provider-dependent)
+	ComputerUse       *ComputerUseTool // Enable computer use (Anthropic only)
+	LogProbs          bool             // Enable log probabilities in response (OpenAI/compatible only)
+	TopLogProbs       int              // Number of top log probs per token (0-20, OpenAI/compatible only)
+	Seed              *int64           // Seed for deterministic output (OpenAI/compatible only, nil = random)
+	ParallelToolCalls *bool            // Control parallel tool calling (nil = provider default, typically true)
+	Prediction        *PredictedOutput // Predicted output for editing (OpenAI only)
 }
 
 // Citation represents a citation from the model's response.
@@ -289,20 +313,23 @@ type Citation struct {
 
 // Response contains the LLM response.
 type Response struct {
-	Content          string         // Generated text
-	Citations        []Citation     // Citations parsed from response (provider-dependent)
-	SearchResults    []SearchResult // Web search results used by the model (provider-dependent)
-	ToolCalls        []ToolCall     // Tool calls requested by the model (when FinishReason is "tool_use" or "tool_calls")
-	Provider         string         // Provider name (e.g., "anthropic")
-	Model            string         // Model used (e.g., "claude-sonnet-4-20250514")
-	InputTokens      int            // Tokens in input
-	OutputTokens     int            // Tokens in output
-	Latency          time.Duration  // Request latency
-	FinishReason     string         // Why generation stopped
-	Thinking         string         // Extended thinking/reasoning content
-	ThinkingTokens   int            // Tokens used for thinking
-	CacheReadTokens  int            // Tokens read from cache
-	CacheWriteTokens int            // Tokens written to cache
+	Content           string         // Generated text
+	Citations         []Citation     // Citations parsed from response (provider-dependent)
+	SearchResults     []SearchResult // Web search results used by the model (provider-dependent)
+	ToolCalls         []ToolCall     // Tool calls requested by the model (when FinishReason is "tool_use" or "tool_calls")
+	Provider          string         // Provider name (e.g., "anthropic")
+	Model             string         // Model used (e.g., "claude-sonnet-4-20250514")
+	InputTokens       int            // Tokens in input
+	OutputTokens      int            // Tokens in output
+	Latency           time.Duration  // Request latency
+	FinishReason      string         // Why generation stopped
+	Thinking          string         // Extended thinking/reasoning content
+	ThinkingTokens    int            // Tokens used for thinking
+	CacheReadTokens   int            // Tokens read from cache
+	CacheWriteTokens  int            // Tokens written to cache
+	LogProbs          []TokenLogProb // Per-token log probabilities (when requested, OpenAI/compatible only)
+	SystemFingerprint string         // System fingerprint for reproducibility tracking (OpenAI/compatible)
+	RequestID         string         // Provider request ID for debugging (e.g., OpenAI x-request-id, Anthropic message ID)
 }
 
 // StreamUsage contains token usage information from streaming responses.
@@ -313,10 +340,11 @@ type StreamUsage struct {
 
 // StreamChunk represents a chunk of streamed response.
 type StreamChunk struct {
-	Content string       // Partial content
-	Done    bool         // True if this is the final chunk
-	Error   error        // Non-nil if streaming failed
-	Usage   *StreamUsage // Token usage (non-nil only in final chunks, provider-dependent)
+	Content  string       // Partial content
+	Thinking string       // Thinking/reasoning content (partial, for streaming, Anthropic only)
+	Done     bool         // True if this is the final chunk
+	Error    error        // Non-nil if streaming failed
+	Usage    *StreamUsage // Token usage (non-nil only in final chunks, provider-dependent)
 }
 
 // EmbedRequest contains parameters for an embedding request.
@@ -617,6 +645,23 @@ func WithTruncationStrategy(strategy string) Option {
 	}
 }
 
+// WithLogProbs enables log probabilities and sets the number of top alternatives per token.
+// Only supported by OpenAI and compatible providers. Ignored by Anthropic.
+func WithLogProbs(topN int) Option {
+	return func(c *Client) {
+		c.logProbs = true
+		c.topLogProbs = topN
+	}
+}
+
+// WithSeed sets a seed for deterministic output.
+// Only supported by OpenAI and compatible providers. Ignored by Anthropic.
+func WithSeed(seed int64) Option {
+	return func(c *Client) {
+		c.seed = &seed
+	}
+}
+
 // Client is the main interface for interacting with LLMs.
 // It is safe for concurrent use.
 type Client struct {
@@ -641,6 +686,9 @@ type Client struct {
 	thinking           *ThinkingConfig // extended thinking config
 	maxContextTokens   int             // soft limit on context tokens
 	truncationStrategy string          // "tail" or "none"
+	logProbs           bool            // enable log probabilities
+	topLogProbs        int             // number of top log probs per token
+	seed               *int64          // seed for deterministic output
 }
 
 // clientState holds a snapshot of client fields for use without holding the lock.
@@ -665,6 +713,9 @@ type clientState struct {
 	thinking           *ThinkingConfig
 	maxContextTokens   int
 	truncationStrategy string
+	logProbs           bool
+	topLogProbs        int
+	seed               *int64
 }
 
 // snapshot captures the current client state under a read lock.
@@ -692,6 +743,9 @@ func (c *Client) snapshot() clientState {
 		thinking:           c.thinking,
 		maxContextTokens:   c.maxContextTokens,
 		truncationStrategy: c.truncationStrategy,
+		logProbs:           c.logProbs,
+		topLogProbs:        c.topLogProbs,
+		seed:               c.seed,
 	}
 }
 
@@ -744,7 +798,7 @@ func buildRequest(messages []Message, s clientState) *Request {
 	if s.systemPrompt != "" {
 		msgs = append([]Message{{Role: RoleSystem, Content: s.systemPrompt}}, msgs...)
 	}
-	return &Request{
+	req := &Request{
 		Messages:         msgs,
 		Model:            s.model,
 		MaxTokens:        s.maxTokens,
@@ -754,7 +808,11 @@ func buildRequest(messages []Message, s clientState) *Request {
 		Tools:            s.tools,
 		ResponseFormat:   s.responseFormat,
 		Thinking:         s.thinking,
+		LogProbs:         s.logProbs,
+		TopLogProbs:      s.topLogProbs,
+		Seed:             s.seed,
 	}
+	return req
 }
 
 // isRetryable returns true if the error is transient and worth retrying.

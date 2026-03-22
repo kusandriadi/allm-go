@@ -343,6 +343,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*a
 		OutputTokens: int(message.Usage.OutputTokens),
 		Latency:      time.Since(start),
 		FinishReason: string(message.StopReason),
+		RequestID:    message.ID, // Anthropic message ID for debugging
 	}
 
 	// Extract cache token usage if available
@@ -520,12 +521,29 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *allm.Request) <-cha
 		defer stream.Close()
 
 		var usage *allm.StreamUsage
+		// Track content block types (index -> type) to handle thinking vs text
+		blockTypes := make(map[int64]string)
+
 		for stream.Next() {
 			event := stream.Current()
-			// content_block_delta events contain text chunks
-			if event.Type == "content_block_delta" && event.Delta.Text != "" {
-				out <- allm.StreamChunk{Content: event.Delta.Text}
+
+			// content_block_start events tell us the block type
+			if event.Type == "content_block_start" {
+				blockTypes[event.Index] = event.ContentBlock.Type
 			}
+
+			// content_block_delta events contain text or thinking chunks
+			if event.Type == "content_block_delta" {
+				blockType := blockTypes[event.Index]
+				if blockType == "thinking" && event.Delta.Thinking != "" {
+					// Thinking content
+					out <- allm.StreamChunk{Thinking: event.Delta.Thinking}
+				} else if event.Delta.Text != "" {
+					// Regular text content
+					out <- allm.StreamChunk{Content: event.Delta.Text}
+				}
+			}
+
 			// message_delta events contain usage information
 			if event.Type == "message_delta" && event.Usage.OutputTokens > 0 {
 				if usage == nil {

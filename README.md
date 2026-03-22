@@ -31,6 +31,11 @@ fmt.Println(resp.Content)
 - **Context management** — automatic truncation when context exceeds limits
 - **Image generation** — DALL-E support via OpenAI
 - **Batch API** — submit bulk requests for async processing
+- **Log probabilities** — per-token log probabilities for confidence scoring (OpenAI/compatible)
+- **Reproducibility** — seed parameter for deterministic outputs (OpenAI/compatible)
+- **Parallel tool calls** — control parallel tool calling behavior (OpenAI/compatible)
+- **Predicted output** — efficient editing with predicted content (OpenAI)
+- **Request tracking** — capture provider request IDs for debugging
 - **Thread-safe** — use one client from multiple goroutines
 - **Health check** — `Ping()` verifies provider connectivity without consuming tokens
 - **Retry with backoff** — automatic retry on rate limits (429), server errors (5xx), and overloaded (529)
@@ -322,6 +327,112 @@ for _, tc := range resp.ToolCalls {
 }
 ```
 
+## Log Probabilities
+
+Get per-token log probabilities for confidence scoring (OpenAI/compatible):
+
+```go
+client := allm.New(p, allm.WithLogProbs(5)) // Enable with top-5 alternatives per token
+
+resp, _ := client.Complete(ctx, "The capital of France is")
+for _, tokenLogProb := range resp.LogProbs {
+    fmt.Printf("Token: %s, LogProb: %.4f\n", tokenLogProb.Token, tokenLogProb.LogProb)
+    for _, alt := range tokenLogProb.TopLogProbs {
+        fmt.Printf("  Alt: %s, LogProb: %.4f\n", alt.Token, alt.LogProb)
+    }
+}
+```
+
+Or set per-request:
+
+```go
+req := &allm.Request{
+    Messages:    messages,
+    LogProbs:    true,
+    TopLogProbs: 10, // 0-20
+}
+resp, _ := client.Chat(ctx, req.Messages)
+```
+
+## Reproducible Outputs
+
+Use seed for deterministic outputs (OpenAI/compatible):
+
+```go
+var seed int64 = 42
+client := allm.New(p, allm.WithSeed(seed))
+
+resp, _ := client.Complete(ctx, "Generate a random story")
+fmt.Println("System fingerprint:", resp.SystemFingerprint) // Tracks system changes
+```
+
+Or set per-request:
+
+```go
+seed := int64(123)
+req := &allm.Request{
+    Messages: messages,
+    Seed:     &seed,
+}
+```
+
+## Parallel Tool Calls
+
+Control parallel tool calling behavior (OpenAI/compatible):
+
+```go
+parallelToolCalls := false
+req := &allm.Request{
+    Messages:          messages,
+    Tools:             tools,
+    ParallelToolCalls: &parallelToolCalls, // Force sequential tool calls
+}
+```
+
+## Predicted Output
+
+Efficient editing with predicted content (OpenAI):
+
+```go
+req := &allm.Request{
+    Messages: []allm.Message{
+        {Role: allm.RoleUser, Content: "Fix typos in this text: ..."},
+    },
+    Prediction: &allm.PredictedOutput{
+        Content: originalText, // The text you expect the model to output
+    },
+}
+// Model only generates the diff, saving tokens and latency
+```
+
+## Request Tracking
+
+Capture provider request IDs for debugging:
+
+```go
+resp, _ := client.Complete(ctx, "Hello")
+fmt.Println("Request ID:", resp.RequestID)
+// Anthropic: message ID (e.g., "msg_abc123")
+// OpenAI: x-request-id header (if exposed by SDK)
+```
+
+## Thinking Streaming
+
+Stream thinking/reasoning content separately (Anthropic):
+
+```go
+client := allm.New(provider.Anthropic(""), allm.WithThinking(5000))
+
+for chunk := range client.Stream(ctx, messages) {
+    if chunk.Thinking != "" {
+        fmt.Print("[Thinking] ", chunk.Thinking)
+    }
+    if chunk.Content != "" {
+        fmt.Print(chunk.Content)
+    }
+}
+```
+
 ## Options
 
 ```go
@@ -338,6 +449,8 @@ allm.WithResponseFormat(&allm.ResponseFormat{// structured output
 allm.WithThinking(10000)                     // extended thinking budget
 allm.WithMaxContextTokens(100000)            // context window limit
 allm.WithTruncationStrategy(allm.TruncateTail) // auto-truncate
+allm.WithLogProbs(5)                         // enable log probabilities with top-5 alternatives
+allm.WithSeed(42)                            // reproducible outputs with seed
 allm.WithHook(func(e allm.HookEvent) {      // lifecycle events
     fmt.Printf("%s latency=%v\n", e.Type, e.Latency)
 })
