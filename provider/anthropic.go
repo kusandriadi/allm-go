@@ -101,7 +101,7 @@ func WithAnthropicLogger(logger allm.Logger) AnthropicOption {
 // Anthropic creates a new Anthropic provider.
 //
 // Authentication (in order of precedence):
-//  1. WithAnthropicAuthToken option or ANTHROPIC_AUTH_TOKEN env → OAuth Bearer token (Claude Pro/Max)
+//  1. WithAnthropicAuthToken option or CLAUDE_CODE_OAUTH_TOKEN env → OAuth Bearer token (Claude Pro/Max)
 //  2. apiKey parameter or ANTHROPIC_API_KEY env → API key (direct Anthropic API)
 func Anthropic(apiKey string, opts ...AnthropicOption) *AnthropicProvider {
 	p := &AnthropicProvider{
@@ -115,7 +115,7 @@ func Anthropic(apiKey string, opts ...AnthropicOption) *AnthropicProvider {
 
 	// Resolve auth: authToken takes precedence over apiKey
 	if p.authToken == "" {
-		p.authToken = os.Getenv("ANTHROPIC_AUTH_TOKEN")
+		p.authToken = os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
 	}
 	if p.authToken == "" && apiKey == "" {
 		apiKey = os.Getenv("ANTHROPIC_API_KEY")

@@ -96,7 +96,7 @@ func TestAnthropicAuthToken(t *testing.T) {
 }
 
 func TestAnthropicAuthTokenEnv(t *testing.T) {
-	t.Setenv("ANTHROPIC_AUTH_TOKEN", "env-oauth-token")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "env-oauth-token")
 	p := Anthropic("")
 	if p.authToken != "env-oauth-token" {
 		t.Errorf("expected env oauth token, got %q", p.authToken)
