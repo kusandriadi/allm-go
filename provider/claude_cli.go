@@ -449,10 +449,6 @@ func (p *ClaudeCLIProvider) Models(_ context.Context) ([]allm.Model, error) {
 		{ID: "claude-opus-4-6", Name: "Claude Opus 4.6", Provider: "claude-cli"},
 		{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6", Provider: "claude-cli"},
 		{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5", Provider: "claude-cli"},
-		{ID: "claude-opus-4-20250514", Name: "Claude Opus 4", Provider: "claude-cli"},
-		{ID: "claude-sonnet-4-20250514", Name: "Claude Sonnet 4", Provider: "claude-cli"},
-		{ID: "claude-sonnet-4-5-20250929", Name: "Claude Sonnet 4.5", Provider: "claude-cli"},
-		{ID: "claude-haiku-3-5-20241022", Name: "Claude Haiku 3.5", Provider: "claude-cli"},
 	}
 	return models, nil
 }
