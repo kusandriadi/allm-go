@@ -149,7 +149,7 @@ Enable reasoning/chain-of-thought for complex tasks:
 ```go
 client := allm.New(
     provider.Anthropic(""),
-    allm.WithModel("claude-sonnet-4-20250514"),
+    allm.WithModel("claude-sonnet-4-6"),
     allm.WithThinking(10000), // 10k token budget for thinking
     allm.WithMaxTokens(16000),
 )

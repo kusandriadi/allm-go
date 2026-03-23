@@ -39,7 +39,7 @@ import (
 )
 
 // Version of the allm-go library
-const Version = "0.8.9"
+const Version = "0.8.10"
 
 // Common errors
 var (
@@ -337,7 +337,7 @@ type Response struct {
 	SearchResults     []SearchResult // Web search results used by the model (provider-dependent)
 	ToolCalls         []ToolCall     // Tool calls requested by the model (when FinishReason is "tool_use" or "tool_calls")
 	Provider          string         // Provider name (e.g., "anthropic")
-	Model             string         // Model used (e.g., "claude-sonnet-4-20250514")
+	Model             string         // Model used (e.g., "claude-sonnet-4-6")
 	InputTokens       int            // Tokens in input
 	OutputTokens      int            // Tokens in output
 	Latency           time.Duration  // Request latency
@@ -489,7 +489,7 @@ type Transcriber interface {
 
 // Model represents an available LLM model.
 type Model struct {
-	ID            string   // Model identifier (e.g., "claude-sonnet-4-20250514")
+	ID            string   // Model identifier (e.g., "claude-sonnet-4-6")
 	Name          string   // Human-readable name (e.g., "Claude Sonnet 4")
 	Provider      string   // Provider name
 	ContextWindow int      // Max input tokens (0 = unknown)

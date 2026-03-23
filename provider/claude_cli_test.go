@@ -14,7 +14,7 @@ func TestClaudeCLINew(t *testing.T) {
 	if p.Name() != "claude-cli" {
 		t.Errorf("expected 'claude-cli', got %q", p.Name())
 	}
-	if p.model != "claude-sonnet-4-20250514" {
+	if p.model != "claude-sonnet-4-6" {
 		t.Errorf("expected default model, got %q", p.model)
 	}
 	if p.cliPath != "claude" {

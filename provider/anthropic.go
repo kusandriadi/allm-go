@@ -105,7 +105,7 @@ func WithAnthropicLogger(logger allm.Logger) AnthropicOption {
 //  2. apiKey parameter or ANTHROPIC_API_KEY env → API key (direct Anthropic API)
 func Anthropic(apiKey string, opts ...AnthropicOption) *AnthropicProvider {
 	p := &AnthropicProvider{
-		model:     "claude-sonnet-4-20250514",
+		model:     "claude-sonnet-4-6",
 		maxTokens: 4096,
 	}
 

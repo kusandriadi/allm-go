@@ -12,6 +12,8 @@ const (
 	AnthropicClaudeOpus4_1 = "claude-opus-4-1-20250805"
 	// Claude Opus 4
 	AnthropicClaudeOpus4 = "claude-opus-4-20250514"
+	// Claude Sonnet 4.6
+	AnthropicClaudeSonnet4_6 = "claude-sonnet-4-6"
 	// Claude Sonnet 4.5
 	AnthropicClaudeSonnet4_5 = "claude-sonnet-4-5-20250929"
 	// Claude Sonnet 4

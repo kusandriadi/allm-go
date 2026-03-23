@@ -104,7 +104,7 @@ func WithCLILogger(logger allm.Logger) CLIOption {
 // or an absolute path to a trusted binary.
 func ClaudeCLI(opts ...CLIOption) *ClaudeCLIProvider {
 	p := &ClaudeCLIProvider{
-		model:           "claude-sonnet-4-20250514",
+		model:           "claude-sonnet-4-6",
 		cliPath:         "claude",
 		skipPermissions: true,
 	}

@@ -441,7 +441,7 @@ func TestErrNotSupported(t *testing.T) {
 
 // TestVersion tests that version was updated
 func TestVersionUpdated(t *testing.T) {
-	if Version != "0.8.9" {
-		t.Errorf("Version = %s, want 0.8.9", Version)
+	if Version != "0.8.10" {
+		t.Errorf("Version = %s, want 0.8.10", Version)
 	}
 }
