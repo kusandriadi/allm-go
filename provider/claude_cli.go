@@ -26,7 +26,7 @@ type ClaudeCLIProvider struct {
 	fallbackModel   string   // --fallback-model for overload fallback (optional)
 	maxBudget       float64  // --max-budget-usd per request (0 = unlimited)
 	appendPrompt    string   // --append-system-prompt (optional)
-	allowedTools    []string // --tools whitelist (empty = disable all tools)
+	allowedTools    []string // nil = all tools; empty = no tools; non-empty = whitelist
 	workDir         string   // working directory for the CLI process (empty = inherit)
 	sessionPersist  bool     // when true, omit --no-session-persistence (enables multi-turn)
 	continueSession bool     // when true, add --continue (resume previous session)
@@ -87,7 +87,7 @@ func WithCLIAppendPrompt(prompt string) CLIOption {
 }
 
 // WithCLIAllowedTools sets the list of allowed tools.
-// When set, uses --allowedTools instead of disabling all tools.
+// nil = don't restrict (all tools available); empty = disable all tools; non-empty = whitelist.
 func WithCLIAllowedTools(tools []string) CLIOption {
 	return func(p *ClaudeCLIProvider) {
 		p.allowedTools = tools
@@ -290,12 +290,11 @@ func (p *ClaudeCLIProvider) buildArgs(req *allm.Request, outputFormat string) (a
 	}
 
 	// Tool access control: --tools sets which tools are loaded (not just permitted).
-	// This is more secure than --allowedTools which is only a permission filter.
-	if len(p.allowedTools) > 0 {
+	// nil = don't restrict tools (all available, for agent use)
+	// empty slice = disable all tools (pure LLM mode)
+	// non-empty = whitelist specific tools
+	if p.allowedTools != nil {
 		args = append(args, "--tools", strings.Join(p.allowedTools, ","))
-	} else {
-		// Disable tools — pure LLM mode
-		args = append(args, "--tools", "")
 	}
 
 	// Extract system prompt and build conversation prompt

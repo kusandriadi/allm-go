@@ -346,6 +346,58 @@ func TestClaudeCLIContinue(t *testing.T) {
 	}
 }
 
+func TestClaudeCLIAllowedTools(t *testing.T) {
+	req := &allm.Request{
+		Messages: []allm.Message{
+			{Role: allm.RoleUser, Content: "Hi"},
+		},
+	}
+
+	flagValue := func(args []string, flag string) (string, bool) {
+		for i, a := range args {
+			if a == flag && i+1 < len(args) {
+				return args[i+1], true
+			}
+		}
+		return "", false
+	}
+
+	// nil allowedTools (default): no --tools flag → all tools available
+	t.Run("nil_default_no_flag", func(t *testing.T) {
+		p := ClaudeCLI()
+		args, _ := p.buildArgs(req, "json")
+		if _, found := flagValue(args, "--tools"); found {
+			t.Error("nil allowedTools should not produce --tools flag")
+		}
+	})
+
+	// empty slice: --tools "" → disable all tools
+	t.Run("empty_slice_disables_tools", func(t *testing.T) {
+		p := ClaudeCLI(WithCLIAllowedTools([]string{}))
+		args, _ := p.buildArgs(req, "json")
+		v, found := flagValue(args, "--tools")
+		if !found {
+			t.Fatal("empty allowedTools should produce --tools flag")
+		}
+		if v != "" {
+			t.Errorf("expected empty --tools value, got %q", v)
+		}
+	})
+
+	// non-empty: --tools "Read,Edit"
+	t.Run("whitelist_specific_tools", func(t *testing.T) {
+		p := ClaudeCLI(WithCLIAllowedTools([]string{"Read", "Edit"}))
+		args, _ := p.buildArgs(req, "json")
+		v, found := flagValue(args, "--tools")
+		if !found {
+			t.Fatal("non-empty allowedTools should produce --tools flag")
+		}
+		if v != "Read,Edit" {
+			t.Errorf("expected --tools 'Read,Edit', got %q", v)
+		}
+	})
+}
+
 func TestClaudeCLIWorkDirDefault(t *testing.T) {
 	// Default: no workDir set
 	p := ClaudeCLI()
