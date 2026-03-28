@@ -39,7 +39,7 @@ import (
 )
 
 // Version of the allm-go library
-const Version = "0.8.11"
+const Version = "0.8.12"
 
 // Common errors
 var (
@@ -164,6 +164,14 @@ type ThinkingConfig struct {
 	Type         string // "enabled" for Anthropic
 	BudgetTokens int    // token budget for thinking
 }
+
+// Effort level constants for adaptive reasoning.
+const (
+	EffortLow    = "low"
+	EffortMedium = "medium"
+	EffortHigh   = "high"
+	EffortMax    = "max" // Opus only
+)
 
 // Truncation strategy constants.
 const (
@@ -310,6 +318,7 @@ type Request struct {
 	Tools             []Tool           // Available tools the model can call
 	ResponseFormat    *ResponseFormat  // Structured output format (JSON mode/schema)
 	Thinking          *ThinkingConfig  // Extended thinking/reasoning config
+	Effort            string           // Effort level: low, medium, high, max (empty = provider default)
 	WebSearch         *WebSearchTool   // Enable built-in web search (provider-dependent)
 	ComputerUse       *ComputerUseTool // Enable computer use (Anthropic only)
 	LogProbs          bool             // Enable log probabilities in response (OpenAI/compatible only)
@@ -405,8 +414,8 @@ type ModelLister interface {
 }
 
 // Embedder is an optional interface providers can implement for text embeddings.
-// Supported by: OpenAI, GLM, Local (Ollama/vLLM).
-// Not supported by: Anthropic, DeepSeek.
+// Supported by: OpenAI, Local (Ollama/vLLM).
+// Not supported by: Anthropic.
 type Embedder interface {
 	// Embed generates embeddings for the given texts.
 	Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error)
@@ -547,7 +556,7 @@ func WithTemperature(t float64) Option {
 }
 
 // WithPresencePenalty sets the default presence penalty.
-// Supported by OpenAI, DeepSeek, and Local providers. Ignored by Anthropic.
+// Supported by OpenAI and Local providers. Ignored by Anthropic.
 func WithPresencePenalty(p float64) Option {
 	return func(c *Client) {
 		c.presencePenalty = p
@@ -555,7 +564,7 @@ func WithPresencePenalty(p float64) Option {
 }
 
 // WithFrequencyPenalty sets the default frequency penalty.
-// Supported by OpenAI, DeepSeek, and Local providers. Ignored by Anthropic.
+// Supported by OpenAI and Local providers. Ignored by Anthropic.
 func WithFrequencyPenalty(p float64) Option {
 	return func(c *Client) {
 		c.frequencyPenalty = p
@@ -648,6 +657,16 @@ func WithThinking(budgetTokens int) Option {
 	}
 }
 
+// WithEffort sets the effort level for adaptive reasoning.
+// Valid values: EffortLow, EffortMedium, EffortHigh, EffortMax (Opus only).
+// For Anthropic API: maps to thinking budget tokens automatically.
+// For CLI provider: passes --effort flag.
+func WithEffort(level string) Option {
+	return func(c *Client) {
+		c.effort = level
+	}
+}
+
 // WithMaxContextTokens sets a soft limit on context tokens.
 // Requires provider to support TokenCounter interface.
 func WithMaxContextTokens(n int) Option {
@@ -703,6 +722,7 @@ type Client struct {
 	hook               Hook            // event callback (nil = no hook)
 	responseFormat     *ResponseFormat // structured output format
 	thinking           *ThinkingConfig // extended thinking config
+	effort             string          // effort level: low, medium, high, max
 	maxContextTokens   int             // soft limit on context tokens
 	truncationStrategy string          // "tail" or "none"
 	logProbs           bool            // enable log probabilities
@@ -738,6 +758,7 @@ type clientState struct {
 	hook               Hook
 	responseFormat     *ResponseFormat
 	thinking           *ThinkingConfig
+	effort             string
 	maxContextTokens   int
 	truncationStrategy string
 	logProbs           bool
@@ -768,6 +789,7 @@ func (c *Client) snapshot() clientState {
 		hook:               c.hook,
 		responseFormat:     c.responseFormat,
 		thinking:           c.thinking,
+		effort:             c.effort,
 		maxContextTokens:   c.maxContextTokens,
 		truncationStrategy: c.truncationStrategy,
 		logProbs:           c.logProbs,
@@ -835,6 +857,7 @@ func buildRequest(messages []Message, s clientState) *Request {
 		Tools:            s.tools,
 		ResponseFormat:   s.responseFormat,
 		Thinking:         s.thinking,
+		Effort:           s.effort,
 		LogProbs:         s.logProbs,
 		TopLogProbs:      s.topLogProbs,
 		Seed:             s.seed,
@@ -925,6 +948,9 @@ func requestMeta(messages []Message, s clientState) []any {
 	}
 	if s.thinking != nil {
 		meta = append(meta, "thinking_budget", s.thinking.BudgetTokens)
+	}
+	if s.effort != "" {
+		meta = append(meta, "effort", s.effort)
 	}
 	if s.maxContextTokens > 0 {
 		meta = append(meta, "max_context_tokens", s.maxContextTokens)
@@ -1325,6 +1351,14 @@ func (c *Client) SetResponseFormat(rf *ResponseFormat) {
 func (c *Client) SetThinking(thinking *ThinkingConfig) {
 	c.mu.Lock()
 	c.thinking = thinking
+	c.mu.Unlock()
+}
+
+// SetEffort updates the effort level for adaptive reasoning.
+// Pass empty string to use provider default.
+func (c *Client) SetEffort(effort string) {
+	c.mu.Lock()
+	c.effort = effort
 	c.mu.Unlock()
 }
 

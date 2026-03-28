@@ -178,11 +178,6 @@ func validateRequest(req *Request) error {
 		return fmt.Errorf("top_log_probs must be between 0 and 20")
 	}
 
-	// Validate ParallelToolCalls (only if tools are provided)
-	// ParallelToolCalls is allowed even without tools — the provider will ignore it
-	// No validation needed here
-	_ = req.ParallelToolCalls
-
 	return nil
 }
 
@@ -249,26 +244,29 @@ func sanitizeError(err error) error {
 	// Wrap provider errors — expose message but strip potential key material
 	msg := err.Error()
 	// Check for common patterns that indicate API key leakage
-	if containsSensitive(msg) {
+	if ContainsSensitive(msg) {
 		return fmt.Errorf("provider error (details redacted for security)")
 	}
 	return err
 }
 
-// containsSensitive checks if an error message might contain API keys or tokens.
-func containsSensitive(msg string) bool {
+// sensitivePatterns are substrings that indicate possible credential leakage.
+var sensitivePatterns = []string{
+	"sk-ant-",        // Anthropic key prefix
+	"sk-",            // OpenAI key prefix
+	"gsk_",           // Google/Gemini key prefix
+	"api_key",        // generic
+	"apikey",         // generic
+	"bearer ",        // auth header
+	"token=",         // token in URL
+	"key=",           // key in URL
+	"authorization:", // auth header
+}
+
+// ContainsSensitive checks if a string might contain API keys or tokens.
+func ContainsSensitive(msg string) bool {
 	lower := strings.ToLower(msg)
-	patterns := []string{
-		"sk-ant-",        // Anthropic key prefix
-		"sk-",            // OpenAI key prefix
-		"api_key",        // generic
-		"apikey",         // generic
-		"bearer ",        // auth header
-		"token=",         // token in URL
-		"key=",           // key in URL
-		"authorization:", // auth header
-	}
-	for _, p := range patterns {
+	for _, p := range sensitivePatterns {
 		if strings.Contains(lower, p) {
 			return true
 		}

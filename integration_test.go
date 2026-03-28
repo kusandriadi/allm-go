@@ -29,7 +29,7 @@ var integrationCases = []integrationCase{
 		name:   "Anthropic",
 		envKey: "ANTHROPIC_API_KEY",
 		setup:  func() allm.Provider { return provider.Anthropic("") },
-		model:  provider.AnthropicClaudeHaiku3_5,
+		model:  provider.AnthropicHaiku,
 		skips:  []allmtest.VerifyOption{allmtest.SkipEmbeddings()},
 	},
 	{
@@ -39,33 +39,16 @@ var integrationCases = []integrationCase{
 		model:  provider.OpenAIGPT4oMini,
 	},
 	{
-		name:   "DeepSeek",
-		envKey: "DEEPSEEK_API_KEY",
-		setup:  func() allm.Provider { return provider.DeepSeek("") },
-		skips:  []allmtest.VerifyOption{allmtest.SkipVision(), allmtest.SkipEmbeddings()},
-	},
-	{
-		name:   "Gemini",
-		envKey: "GEMINI_API_KEY",
-		setup:  func() allm.Provider { return provider.Gemini("") },
-		skips:  []allmtest.VerifyOption{allmtest.SkipEmbeddings()},
-	},
-	{
 		name:   "GLM",
 		envKey: "GLM_API_KEY",
 		setup:  func() allm.Provider { return provider.GLM("") },
-		skips:  []allmtest.VerifyOption{allmtest.SkipVision()},
+		skips:  []allmtest.VerifyOption{allmtest.SkipVision(), allmtest.SkipEmbeddings()},
 	},
 	{
 		name:   "Kimi",
 		envKey: "MOONSHOT_API_KEY",
 		setup:  func() allm.Provider { return provider.Kimi("") },
 		skips:  []allmtest.VerifyOption{allmtest.SkipVision(), allmtest.SkipEmbeddings()},
-	},
-	{
-		name:   "Qwen",
-		envKey: "DASHSCOPE_API_KEY",
-		setup:  func() allm.Provider { return provider.Qwen("") },
 	},
 	{
 		name:   "MiniMax",

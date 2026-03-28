@@ -104,7 +104,7 @@ func WithCLILogger(logger allm.Logger) CLIOption {
 // or an absolute path to a trusted binary.
 func ClaudeCLI(opts ...CLIOption) *ClaudeCLIProvider {
 	p := &ClaudeCLIProvider{
-		model:           "claude-sonnet-4-6",
+		model:           "sonnet",
 		cliPath:         "claude",
 		skipPermissions: true,
 	}
@@ -176,13 +176,9 @@ func (p *ClaudeCLIProvider) AppendPrompt() string { return p.appendPrompt }
 
 // cliResult represents the JSON output from claude CLI (--output-format json).
 type cliResult struct {
-	Type       string  `json:"type"`
-	Subtype    string  `json:"subtype"`
-	IsError    bool    `json:"is_error"`
-	Result     string  `json:"result"`
-	DurationMs int     `json:"duration_ms"`
-	TotalCost  float64 `json:"total_cost_usd"`
-	Usage      struct {
+	IsError bool   `json:"is_error"`
+	Result  string `json:"result"`
+	Usage   struct {
 		InputTokens              int `json:"input_tokens"`
 		OutputTokens             int `json:"output_tokens"`
 		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
@@ -220,9 +216,13 @@ func (p *ClaudeCLIProvider) buildArgs(req *allm.Request, outputFormat string) (a
 	}
 	args = append(args, "--model", model)
 
-	// Effort
-	if p.effort != "" {
-		args = append(args, "--effort", p.effort)
+	// Effort: request-level takes precedence over provider-level
+	effort := p.effort
+	if req.Effort != "" {
+		effort = req.Effort
+	}
+	if effort != "" {
+		args = append(args, "--effort", effort)
 	}
 
 	// Fallback model
@@ -279,10 +279,14 @@ func (p *ClaudeCLIProvider) buildArgs(req *allm.Request, outputFormat string) (a
 }
 
 // truncateErr returns the first 500 chars of an error message to prevent leaking large outputs.
+// Also redacts content that may contain credentials.
 func truncateErr(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) > 500 {
-		return s[:500] + "..."
+		s = s[:500] + "..."
+	}
+	if allm.ContainsSensitive(s) {
+		return "(error redacted: may contain credentials)"
 	}
 	return s
 }
@@ -446,9 +450,10 @@ func (p *ClaudeCLIProvider) Stream(ctx context.Context, req *allm.Request) <-cha
 // The CLI doesn't provide a model listing endpoint.
 func (p *ClaudeCLIProvider) Models(_ context.Context) ([]allm.Model, error) {
 	models := []allm.Model{
-		{ID: "claude-opus-4-6", Name: "Claude Opus 4.6", Provider: "claude-cli"},
-		{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6", Provider: "claude-cli"},
-		{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5", Provider: "claude-cli"},
+		{ID: "opus", Name: "Claude Opus", Provider: "claude-cli"},
+		{ID: "sonnet", Name: "Claude Sonnet", Provider: "claude-cli"},
+		{ID: "haiku", Name: "Claude Haiku", Provider: "claude-cli"},
+		{ID: "opusplan", Name: "Claude OpusPlan", Provider: "claude-cli"},
 	}
 	return models, nil
 }

@@ -83,6 +83,49 @@ func isLocalOrPrivate(hostname string) bool {
 		ip.IsUnspecified()
 }
 
+// effortToBudget maps effort level to thinking budget tokens.
+// maxTokens is the request's max output tokens, used to scale the budget.
+func effortToBudget(effort string, maxTokens int64) int {
+	switch effort {
+	case allm.EffortLow:
+		return 1024
+	case allm.EffortMedium:
+		return 8192
+	case allm.EffortHigh:
+		return 32768
+	case allm.EffortMax:
+		// Use 80% of maxTokens or 128k, whichever is smaller
+		budget := int(float64(maxTokens) * 0.8)
+		if budget > 128000 {
+			budget = 128000
+		}
+		if budget < 32768 {
+			budget = 32768
+		}
+		return budget
+	default:
+		return 0
+	}
+}
+
+// effortToReasoningEffort maps allm effort level to OpenAI SDK ReasoningEffort.
+// Used by OpenAI-compatible providers (including Ollama).
+// "max" maps to "high" since Ollama/OpenAI don't have a "max" level.
+func effortToReasoningEffort(effort string) shared.ReasoningEffort {
+	switch effort {
+	case allm.EffortLow:
+		return shared.ReasoningEffortLow
+	case allm.EffortMedium:
+		return shared.ReasoningEffortMedium
+	case allm.EffortHigh:
+		return shared.ReasoningEffortHigh
+	case allm.EffortMax:
+		return shared.ReasoningEffortHigh
+	default:
+		return shared.ReasoningEffort(effort)
+	}
+}
+
 // sanitizeProviderError returns a safe error string for debug logging.
 // Strips potential API keys, auth tokens, and sensitive URL components.
 func sanitizeProviderError(err error) string {
@@ -90,45 +133,47 @@ func sanitizeProviderError(err error) string {
 		return ""
 	}
 	msg := err.Error()
-	// Check for patterns that indicate API key leakage
-	lower := strings.ToLower(msg)
-	sensitivePatterns := []string{
-		"sk-ant-", "sk-", "gsk_", "api_key", "apikey",
-		"bearer ", "token=", "key=", "authorization:",
-	}
-	for _, p := range sensitivePatterns {
-		if strings.Contains(lower, p) {
-			return "(error redacted: may contain credentials)"
-		}
+	if allm.ContainsSensitive(msg) {
+		return "(error redacted: may contain credentials)"
 	}
 	return msg
 }
 
-// wrapOpenAIError wraps OpenAI-compatible API errors with allm sentinel errors.
-// Maps HTTP status codes to allm errors:
+// wrapHTTPStatusError maps HTTP status codes to allm sentinel errors:
 //   - 429 → ErrRateLimited
 //   - 529 → ErrOverloaded
 //   - 500-599 → ErrServerError
+//
+// Returns nil if statusCode doesn't match any known error.
+func wrapHTTPStatusError(statusCode int, err error) error {
+	switch {
+	case statusCode == http.StatusTooManyRequests:
+		return fmt.Errorf("%w: %w", allm.ErrRateLimited, err)
+	case statusCode == 529:
+		return fmt.Errorf("%w: %w", allm.ErrOverloaded, err)
+	case statusCode >= 500 && statusCode < 600:
+		return fmt.Errorf("%w: %w", allm.ErrServerError, err)
+	default:
+		return nil
+	}
+}
+
+// wrapOpenAIError wraps OpenAI-compatible API errors with allm sentinel errors.
 func wrapOpenAIError(err error) error {
 	if err == nil {
 		return nil
 	}
 	var apiErr *openai.Error
 	if errors.As(err, &apiErr) {
-		switch {
-		case apiErr.StatusCode == http.StatusTooManyRequests:
-			return fmt.Errorf("%w: %w", allm.ErrRateLimited, err)
-		case apiErr.StatusCode == 529:
-			return fmt.Errorf("%w: %w", allm.ErrOverloaded, err)
-		case apiErr.StatusCode >= 500 && apiErr.StatusCode < 600:
-			return fmt.Errorf("%w: %w", allm.ErrServerError, err)
+		if wrapped := wrapHTTPStatusError(apiErr.StatusCode, err); wrapped != nil {
+			return wrapped
 		}
 	}
 	return err
 }
 
 // convertToOpenAI converts allm messages to OpenAI SDK format with image support.
-// Shared by all OpenAI-compatible providers (OpenAI, DeepSeek, Gemini, GLM, etc).
+// Shared by all OpenAI-compatible providers (OpenAI, Kimi, MiniMax, etc).
 // Returns an error if messages contain documents (OpenAI doesn't support native PDF).
 func convertToOpenAI(msgs []allm.Message) ([]openai.ChatCompletionMessageParamUnion, error) {
 	var messages []openai.ChatCompletionMessageParamUnion
@@ -325,6 +370,11 @@ func openaiChatParams(
 		params.ParallelToolCalls = openai.Bool(*req.ParallelToolCalls)
 	}
 
+	// Reasoning effort (Ollama thinking models, OpenAI reasoning models)
+	if req.Effort != "" {
+		params.ReasoningEffort = effortToReasoningEffort(req.Effort)
+	}
+
 	// Predicted output for editing use cases
 	if req.Prediction != nil {
 		params.Prediction = openai.ChatCompletionPredictionContentParam{
@@ -404,10 +454,15 @@ func openaiCompleteResponse(
 		}
 	}
 
-	// Extract reasoning content for DeepSeek Reasoner models
-	// The SDK may expose this as part of the message in completion.Choices[0].Message
-	// This is a placeholder - actual field name depends on SDK implementation
-	// For now, we'll check if the response has extra fields (may need SDK update)
+	// Extract reasoning content (Ollama returns this as "reasoning" extra field)
+	if f, ok := completion.Choices[0].Message.JSON.ExtraFields["reasoning"]; ok {
+		if raw := f.Raw(); raw != "" {
+			var reasoning string
+			if json.Unmarshal([]byte(raw), &reasoning) == nil {
+				resp.Thinking = reasoning
+			}
+		}
+	}
 
 	for _, tc := range completion.Choices[0].Message.ToolCalls {
 		resp.ToolCalls = append(resp.ToolCalls, allm.ToolCall{
@@ -422,15 +477,25 @@ func openaiCompleteResponse(
 
 // openaiStreamLoop reads from an OpenAI streaming response and forwards chunks to out.
 func openaiStreamLoop(stream *ssestream.Stream[openai.ChatCompletionChunk], out chan<- allm.StreamChunk) {
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	var usage *allm.StreamUsage
 	for stream.Next() {
 		chunk := stream.Current()
 		if len(chunk.Choices) > 0 {
-			content := chunk.Choices[0].Delta.Content
-			if content != "" {
-				out <- allm.StreamChunk{Content: content}
+			delta := chunk.Choices[0].Delta
+			content := delta.Content
+
+			// Extract reasoning content (Ollama returns this as "reasoning" extra field)
+			var reasoning string
+			if f, ok := delta.JSON.ExtraFields["reasoning"]; ok {
+				if raw := f.Raw(); raw != "" {
+					_ = json.Unmarshal([]byte(raw), &reasoning)
+				}
+			}
+
+			if content != "" || reasoning != "" {
+				out <- allm.StreamChunk{Content: content, Thinking: reasoning}
 			}
 		}
 		// Parse usage from final chunk (when stream_options.include_usage=true)

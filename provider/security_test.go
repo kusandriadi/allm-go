@@ -111,12 +111,9 @@ func TestSSRF_AllowsPublicAPIs(t *testing.T) {
 	allowed := []string{
 		"https://api.openai.com/v1",
 		"https://api.anthropic.com",
-		"https://api.deepseek.com/v1",
-		"https://generativelanguage.googleapis.com/v1beta/openai/",
 		"https://api.moonshot.cn/v1",
-		"https://dashscope.aliyuncs.com/compatible-mode/v1",
 		"https://api.minimax.chat/v1",
-		"https://open.bigmodel.cn/api/paas/v4/",
+		"https://api.z.ai/api/anthropic",
 		"http://93.184.216.34/v1", // public IP
 	}
 	for _, u := range allowed {
@@ -249,7 +246,7 @@ func TestCompatSSRF(t *testing.T) {
 			t.Error("compat provider with private IP should panic")
 		}
 	}()
-	DeepSeek("key", WithBaseURL("http://192.168.1.1:8080"))
+	OpenAICompatible("test", "key", WithBaseURL("http://192.168.1.1:8080"))
 }
 
 func TestCompatSSRF_MetadataEndpoint(t *testing.T) {
@@ -258,5 +255,5 @@ func TestCompatSSRF_MetadataEndpoint(t *testing.T) {
 			t.Error("compat provider with AWS metadata endpoint should panic")
 		}
 	}()
-	DeepSeek("key", WithBaseURL("http://169.254.169.254/latest/meta-data/"))
+	OpenAICompatible("test", "key", WithBaseURL("http://169.254.169.254/latest/meta-data/"))
 }

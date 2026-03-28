@@ -25,8 +25,8 @@ func main() {
 		{"Anthropic", allm.New(provider.Anthropic(""))},
 		// Reads from OPENAI_API_KEY env
 		{"OpenAI", allm.New(provider.OpenAI(""))},
-		// Reads from DEEPSEEK_API_KEY env
-		{"DeepSeek", allm.New(provider.DeepSeek(""))},
+		// Reads from GLM_API_KEY env
+		{"GLM", allm.New(provider.GLM(""))},
 		// Local Ollama (must be running)
 		// {"Local (Ollama)", allm.New(provider.Ollama("llama3"))},
 	}

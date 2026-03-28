@@ -1,41 +1,57 @@
 package provider
 
-import "github.com/kusandriadi/allm-go"
+import (
+	"os"
 
-// DeepSeek creates a new DeepSeek provider.
-// If apiKey is empty, it reads from DEEPSEEK_API_KEY environment variable.
-func DeepSeek(apiKey string, opts ...CompatOption) *OpenAICompatibleProvider {
-	return OpenAICompatible(allm.DeepSeek, apiKey, opts...)
-}
+	"github.com/kusandriadi/allm-go"
+)
 
-// Gemini creates a new Google Gemini provider.
-// If apiKey is empty, it reads from GEMINI_API_KEY environment variable.
-func Gemini(apiKey string, opts ...CompatOption) *OpenAICompatibleProvider {
-	return OpenAICompatible(allm.Gemini, apiKey, opts...)
-}
-
-// GLM creates a new Zhipu AI GLM provider.
+// GLM creates a new Zhipu AI GLM provider using the Anthropic-compatible API.
 // If apiKey is empty, it reads from GLM_API_KEY environment variable.
-func GLM(apiKey string, opts ...CompatOption) *OpenAICompatibleProvider {
-	return OpenAICompatible(allm.GLM, apiKey, opts...)
+func GLM(apiKey string, opts ...AnthropicOption) *AnthropicProvider {
+	if apiKey == "" {
+		apiKey = os.Getenv("GLM_API_KEY")
+	}
+	defaults := []AnthropicOption{
+		WithAnthropicBaseURL("https://api.z.ai/api/anthropic"),
+		WithAnthropicModel(GLM4Dot7),
+	}
+	allOpts := append(defaults, opts...)
+	p := Anthropic(apiKey, allOpts...)
+	p.name = "glm"
+	return p
 }
 
-// Kimi creates a new Moonshot AI Kimi provider.
+// Kimi creates a new Moonshot AI Kimi provider using the Anthropic-compatible API.
 // If apiKey is empty, it reads from MOONSHOT_API_KEY environment variable.
-func Kimi(apiKey string, opts ...CompatOption) *OpenAICompatibleProvider {
-	return OpenAICompatible(allm.Kimi, apiKey, opts...)
+func Kimi(apiKey string, opts ...AnthropicOption) *AnthropicProvider {
+	if apiKey == "" {
+		apiKey = os.Getenv("MOONSHOT_API_KEY")
+	}
+	defaults := []AnthropicOption{
+		WithAnthropicBaseURL("https://api.moonshot.ai/anthropic"),
+		WithAnthropicModel(KimiK2_5),
+	}
+	allOpts := append(defaults, opts...)
+	p := Anthropic(apiKey, allOpts...)
+	p.name = "kimi"
+	return p
 }
 
-// Qwen creates a new Alibaba Qwen provider (via DashScope).
-// If apiKey is empty, it reads from DASHSCOPE_API_KEY environment variable.
-func Qwen(apiKey string, opts ...CompatOption) *OpenAICompatibleProvider {
-	return OpenAICompatible(allm.Qwen, apiKey, opts...)
-}
-
-// MiniMax creates a new MiniMax provider.
+// MiniMax creates a new MiniMax provider using the Anthropic-compatible API.
 // If apiKey is empty, it reads from MINIMAX_API_KEY environment variable.
-func MiniMax(apiKey string, opts ...CompatOption) *OpenAICompatibleProvider {
-	return OpenAICompatible(allm.MiniMax, apiKey, opts...)
+func MiniMax(apiKey string, opts ...AnthropicOption) *AnthropicProvider {
+	if apiKey == "" {
+		apiKey = os.Getenv("MINIMAX_API_KEY")
+	}
+	defaults := []AnthropicOption{
+		WithAnthropicBaseURL("https://api.minimax.io/anthropic"),
+		WithAnthropicModel(MiniMaxM2_7),
+	}
+	allOpts := append(defaults, opts...)
+	p := Anthropic(apiKey, allOpts...)
+	p.name = "minimax"
+	return p
 }
 
 // Local creates a Local provider for OpenAI-compatible servers.

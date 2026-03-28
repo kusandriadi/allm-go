@@ -19,18 +19,18 @@ func FormatModelList(models map[string][]Model) string {
 
 	for _, providerName := range providers {
 		modelList := models[providerName]
-		sb.WriteString(fmt.Sprintf("\n**%s** (%d models):\n", strings.ToUpper(providerName), len(modelList)))
+		fmt.Fprintf(&sb, "\n**%s** (%d models):\n", strings.ToUpper(providerName), len(modelList))
 		for _, m := range modelList {
-			sb.WriteString(fmt.Sprintf("• `%s`", m.ID))
+			fmt.Fprintf(&sb, "• `%s`", m.ID)
 			if m.ContextWindow > 0 {
 				if len(modelList) > 10 {
-					sb.WriteString(fmt.Sprintf(" (%dk ctx)", m.ContextWindow/1000))
+					fmt.Fprintf(&sb, " (%dk ctx)", m.ContextWindow/1000)
 				} else {
-					sb.WriteString(fmt.Sprintf(" - %dk context", m.ContextWindow/1000))
+					fmt.Fprintf(&sb, " - %dk context", m.ContextWindow/1000)
 				}
 			}
 			if len(modelList) <= 10 && len(m.Capabilities) > 0 {
-				sb.WriteString(fmt.Sprintf(" [%s]", strings.Join(m.Capabilities, ", ")))
+				fmt.Fprintf(&sb, " [%s]", strings.Join(m.Capabilities, ", "))
 			}
 			sb.WriteString("\n")
 		}

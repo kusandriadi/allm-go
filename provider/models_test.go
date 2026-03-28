@@ -6,16 +6,9 @@ import (
 
 func TestAnthropicModelConstants(t *testing.T) {
 	models := map[string]string{
-		"AnthropicClaudeOpus4_6":   AnthropicClaudeOpus4_6,
-		"AnthropicClaudeOpus4_5":   AnthropicClaudeOpus4_5,
-		"AnthropicClaudeOpus4_1":   AnthropicClaudeOpus4_1,
-		"AnthropicClaudeOpus4":     AnthropicClaudeOpus4,
-		"AnthropicClaudeSonnet4_5": AnthropicClaudeSonnet4_5,
-		"AnthropicClaudeSonnet4":   AnthropicClaudeSonnet4,
-		"AnthropicClaudeSonnet3_7": AnthropicClaudeSonnet3_7,
-		"AnthropicClaudeHaiku4_5":  AnthropicClaudeHaiku4_5,
-		"AnthropicClaudeHaiku3_5":  AnthropicClaudeHaiku3_5,
-		"AnthropicClaudeHaiku3":    AnthropicClaudeHaiku3,
+		"AnthropicOpus":   AnthropicOpus,
+		"AnthropicSonnet": AnthropicSonnet,
+		"AnthropicHaiku":  AnthropicHaiku,
 	}
 
 	for name, val := range models {
@@ -53,25 +46,13 @@ func TestOpenAIModelConstants(t *testing.T) {
 	}
 }
 
-func TestDeepSeekModelConstants(t *testing.T) {
-	if DeepSeekChat == "" {
-		t.Error("DeepSeekChat should not be empty")
-	}
-	if DeepSeekReasoner == "" {
-		t.Error("DeepSeekReasoner should not be empty")
-	}
-}
-
 func TestGLMModelConstants(t *testing.T) {
 	models := map[string]string{
-		"GLM5":          GLM5,
-		"GLM4_7":        GLM4_7,
-		"GLM4_7Flash":   GLM4_7Flash,
-		"GLM4_6":        GLM4_6,
-		"GLM4_5":        GLM4_5,
-		"GLM4_5Flash":   GLM4_5Flash,
-		"GLMEmbedding3": GLMEmbedding3,
-		"GLMEmbedding2": GLMEmbedding2,
+		"GLM5Dot1":  GLM5Dot1,
+		"GLM5":      GLM5,
+		"GLM5Turbo": GLM5Turbo,
+		"GLM4Dot7":  GLM4Dot7,
+		"GLM4Dot6":  GLM4Dot6,
 	}
 
 	for name, val := range models {
@@ -83,25 +64,11 @@ func TestGLMModelConstants(t *testing.T) {
 
 func TestKimiModelConstants(t *testing.T) {
 	models := map[string]string{
-		"KimiMoonshotV1_8K":   KimiMoonshotV1_8K,
-		"KimiMoonshotV1_32K":  KimiMoonshotV1_32K,
-		"KimiMoonshotV1_128K": KimiMoonshotV1_128K,
-	}
-	for name, val := range models {
-		if val == "" {
-			t.Errorf("%s is empty", name)
-		}
-	}
-}
-
-func TestQwenModelConstants(t *testing.T) {
-	models := map[string]string{
-		"QwenMax":             QwenMax,
-		"QwenPlus":            QwenPlus,
-		"QwenTurbo":           QwenTurbo,
-		"QwenLong":            QwenLong,
-		"QwQPlus":             QwQPlus,
-		"QwenTextEmbeddingV3": QwenTextEmbeddingV3,
+		"KimiK2_5":            KimiK2_5,
+		"KimiK2Preview":       KimiK2Preview,
+		"KimiK2TurboPreview":  KimiK2TurboPreview,
+		"KimiK2Thinking":      KimiK2Thinking,
+		"KimiK2ThinkingTurbo": KimiK2ThinkingTurbo,
 	}
 	for name, val := range models {
 		if val == "" {
@@ -112,8 +79,11 @@ func TestQwenModelConstants(t *testing.T) {
 
 func TestMiniMaxModelConstants(t *testing.T) {
 	models := map[string]string{
-		"MiniMaxText01":      MiniMaxText01,
-		"MiniMaxText01_128K": MiniMaxText01_128K,
+		"MiniMaxM2_7":          MiniMaxM2_7,
+		"MiniMaxM2_7HighSpeed": MiniMaxM2_7HighSpeed,
+		"MiniMaxM2_5":          MiniMaxM2_5,
+		"MiniMaxM2_5HighSpeed": MiniMaxM2_5HighSpeed,
+		"MiniMaxM2":            MiniMaxM2,
 	}
 	for name, val := range models {
 		if val == "" {
@@ -124,9 +94,9 @@ func TestMiniMaxModelConstants(t *testing.T) {
 
 func TestModelConstantsUsableAsOptions(t *testing.T) {
 	// Verify model constants work with provider options
-	p1 := Anthropic("key", WithAnthropicModel(AnthropicClaudeOpus4_6))
-	if p1.model != "claude-opus-4-6" {
-		t.Errorf("expected claude-opus-4-6, got %q", p1.model)
+	p1 := Anthropic("key", WithAnthropicModel(AnthropicOpus))
+	if p1.model != "opus" {
+		t.Errorf("expected opus, got %q", p1.model)
 	}
 
 	p2 := OpenAI("key", WithOpenAIModel(OpenAIGPT5_2))
@@ -134,12 +104,7 @@ func TestModelConstantsUsableAsOptions(t *testing.T) {
 		t.Errorf("expected gpt-5.2, got %q", p2.model)
 	}
 
-	p3 := DeepSeek("key", WithDefaultModel(DeepSeekReasoner))
-	if p3.model != "deepseek-reasoner" {
-		t.Errorf("expected deepseek-reasoner, got %q", p3.model)
-	}
-
-	p4 := GLM("key", WithDefaultModel(GLM5))
+	p4 := GLM("key", WithAnthropicModel(GLM5))
 	if p4.model != "glm-5" {
 		t.Errorf("expected glm-5, got %q", p4.model)
 	}

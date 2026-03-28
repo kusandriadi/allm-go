@@ -1308,7 +1308,6 @@ type mockLogger struct {
 	mu      sync.Mutex
 	debugs  []string
 	infos   []string
-	warns   []string
 	errors_ []string
 }
 
@@ -1322,11 +1321,7 @@ func (l *mockLogger) Info(msg string, args ...any) {
 	l.infos = append(l.infos, msg)
 	l.mu.Unlock()
 }
-func (l *mockLogger) Warn(msg string, args ...any) {
-	l.mu.Lock()
-	l.warns = append(l.warns, msg)
-	l.mu.Unlock()
-}
+func (l *mockLogger) Warn(msg string, args ...any) {}
 func (l *mockLogger) Error(msg string, args ...any) {
 	l.mu.Lock()
 	l.errors_ = append(l.errors_, msg)

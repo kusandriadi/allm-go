@@ -14,7 +14,7 @@ func TestClaudeCLINew(t *testing.T) {
 	if p.Name() != "claude-cli" {
 		t.Errorf("expected 'claude-cli', got %q", p.Name())
 	}
-	if p.model != "claude-sonnet-4-6" {
+	if p.model != "sonnet" {
 		t.Errorf("expected default model, got %q", p.model)
 	}
 	if p.cliPath != "claude" {
@@ -125,6 +125,27 @@ func TestClaudeCLIBuildArgs(t *testing.T) {
 	if !foundEffort {
 		t.Error("effort not set in args")
 	}
+}
+
+func TestClaudeCLIRequestEffortOverride(t *testing.T) {
+	// Provider has medium effort, but request overrides to high
+	p := ClaudeCLI(WithCLIEffort("medium"))
+	req := &allm.Request{
+		Messages: []allm.Message{
+			{Role: allm.RoleUser, Content: "Hi"},
+		},
+		Effort: allm.EffortHigh,
+	}
+	args, _ := p.buildArgs(req, "json")
+	for i, a := range args {
+		if a == "--effort" && i+1 < len(args) {
+			if args[i+1] != "high" {
+				t.Errorf("expected request effort 'high' to override provider 'medium', got %q", args[i+1])
+			}
+			return
+		}
+	}
+	t.Error("--effort flag not found in args")
 }
 
 func TestClaudeCLISkipPermissionsDisabled(t *testing.T) {

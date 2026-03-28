@@ -6,131 +6,6 @@ import (
 	"github.com/kusandriadi/allm-go"
 )
 
-// providerTestCase defines expected defaults for a registered provider shortcut.
-type providerTestCase struct {
-	name       string
-	create     func(string, ...CompatOption) *OpenAICompatibleProvider
-	wantName   string
-	wantModel  string
-	wantURL    string
-	envKey     string
-	embedModel string // non-empty if provider supports embeddings
-}
-
-// registeredProviders lists all OpenAI-compatible provider shortcuts with expected defaults.
-var registeredProviders = []providerTestCase{
-	{
-		name: "DeepSeek", create: DeepSeek,
-		wantName: "deepseek", wantModel: "deepseek-chat",
-		wantURL: "https://api.deepseek.com/v1", envKey: "DEEPSEEK_API_KEY",
-	},
-	{
-		name: "GLM", create: GLM,
-		wantName: "glm", wantModel: "glm-4-flash",
-		wantURL: "https://open.bigmodel.cn/api/paas/v4/", envKey: "GLM_API_KEY",
-		embedModel: "embedding-3",
-	},
-	{
-		name: "Gemini", create: Gemini,
-		wantName: "gemini", wantModel: "gemini-2.0-flash",
-		wantURL: "https://generativelanguage.googleapis.com/v1beta/openai/", envKey: "GEMINI_API_KEY",
-	},
-	{
-		name: "Kimi", create: Kimi,
-		wantName: "kimi", wantModel: "moonshot-v1-8k",
-		wantURL: "https://api.moonshot.cn/v1", envKey: "MOONSHOT_API_KEY",
-	},
-	{
-		name: "Qwen", create: Qwen,
-		wantName: "qwen", wantModel: "qwen-plus",
-		wantURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", envKey: "DASHSCOPE_API_KEY",
-		embedModel: "text-embedding-v3",
-	},
-	{
-		name: "MiniMax", create: MiniMax,
-		wantName: "minimax", wantModel: "MiniMax-Text-01",
-		wantURL: "https://api.minimax.chat/v1", envKey: "MINIMAX_API_KEY",
-	},
-}
-
-// TestProviderDefaults verifies each shortcut returns correct name, model, URL, and maxTokens.
-func TestProviderDefaults(t *testing.T) {
-	for _, tc := range registeredProviders {
-		t.Run(tc.name, func(t *testing.T) {
-			p := tc.create("")
-			if p.Name() != tc.wantName {
-				t.Errorf("Name() = %q, want %q", p.Name(), tc.wantName)
-			}
-			if p.model != tc.wantModel {
-				t.Errorf("model = %q, want %q", p.model, tc.wantModel)
-			}
-			if p.baseURL != tc.wantURL {
-				t.Errorf("baseURL = %q, want %q", p.baseURL, tc.wantURL)
-			}
-			if p.maxTokens != 4096 {
-				t.Errorf("maxTokens = %d, want 4096", p.maxTokens)
-			}
-			if tc.embedModel != "" && p.embedModel != tc.embedModel {
-				t.Errorf("embedModel = %q, want %q", p.embedModel, tc.embedModel)
-			}
-		})
-	}
-}
-
-// TestProviderWithOptions verifies custom options override defaults.
-func TestProviderWithOptions(t *testing.T) {
-	for _, tc := range registeredProviders {
-		t.Run(tc.name, func(t *testing.T) {
-			p := tc.create("test-key",
-				WithDefaultModel("custom-model"),
-				WithMaxTokens(8192),
-				WithTemperature(0.5),
-			)
-			if p.apiKey != "test-key" {
-				t.Error("apiKey not set")
-			}
-			if p.model != "custom-model" {
-				t.Error("model override not applied")
-			}
-			if p.maxTokens != 8192 {
-				t.Error("maxTokens override not applied")
-			}
-			if p.temperature != 0.5 {
-				t.Error("temperature override not applied")
-			}
-		})
-	}
-}
-
-// TestProviderAvailable verifies availability checks (key required for non-local).
-func TestProviderAvailable(t *testing.T) {
-	for _, tc := range registeredProviders {
-		t.Run(tc.name+"_without_key", func(t *testing.T) {
-			if tc.create("").Available() {
-				t.Error("should not be available without key")
-			}
-		})
-		t.Run(tc.name+"_with_key", func(t *testing.T) {
-			if !tc.create("test-key").Available() {
-				t.Error("should be available with key")
-			}
-		})
-	}
-}
-
-// TestProviderEnvKey verifies each shortcut reads from the correct environment variable.
-func TestProviderEnvKey(t *testing.T) {
-	for _, tc := range registeredProviders {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv(tc.envKey, "env-key")
-			p := tc.create("")
-			if p.apiKey != "env-key" {
-				t.Errorf("apiKey = %q, want env-key (from %s)", p.apiKey, tc.envKey)
-			}
-		})
-	}
-}
-
 // --- Local / Ollama / vLLM ---
 
 func TestLocal(t *testing.T) {
@@ -235,21 +110,21 @@ func TestOpenAICompatibleCustomProvider(t *testing.T) {
 }
 
 func TestOpenAICompatibleRegistryLookup(t *testing.T) {
-	p := OpenAICompatible(allm.DeepSeek, "test-key")
-	if p.baseURL != "https://api.deepseek.com/v1" {
+	p := OpenAICompatible(allm.Local, "test-key")
+	if p.baseURL != "http://localhost:11434/v1" {
 		t.Errorf("expected registry baseURL, got %q", p.baseURL)
 	}
-	if p.model != "deepseek-chat" {
+	if p.model != "llama3" {
 		t.Errorf("expected registry model, got %q", p.model)
 	}
 }
 
 func TestOpenAICompatibleExplicitOverridesRegistry(t *testing.T) {
-	p := OpenAICompatible(allm.DeepSeek, "test-key",
-		WithBaseURL("https://custom.api"),
+	p := OpenAICompatible(allm.Local, "test-key",
+		WithBaseURL("http://localhost:9000/v1"),
 		WithDefaultModel("custom-model"),
 	)
-	if p.baseURL != "https://custom.api" {
+	if p.baseURL != "http://localhost:9000/v1" {
 		t.Error("explicit baseURL should override registry")
 	}
 	if p.model != "custom-model" {
@@ -258,16 +133,16 @@ func TestOpenAICompatibleExplicitOverridesRegistry(t *testing.T) {
 }
 
 func TestOpenAICompatibleEnvKeyFallback(t *testing.T) {
-	t.Setenv("DEEPSEEK_API_KEY", "env-ds-key")
-	p := OpenAICompatible(allm.DeepSeek, "")
-	if p.apiKey != "env-ds-key" {
-		t.Errorf("apiKey = %q, want env-ds-key", p.apiKey)
+	t.Setenv("LOCAL_API_KEY", "env-local-key")
+	p := OpenAICompatible(allm.Local, "")
+	if p.apiKey != "env-local-key" {
+		t.Errorf("apiKey = %q, want env-local-key", p.apiKey)
 	}
 }
 
 func TestOpenAICompatibleExplicitKeyOverridesEnv(t *testing.T) {
-	t.Setenv("DEEPSEEK_API_KEY", "env-ds-key")
-	p := OpenAICompatible(allm.DeepSeek, "explicit-key")
+	t.Setenv("LOCAL_API_KEY", "env-local-key")
+	p := OpenAICompatible(allm.Local, "explicit-key")
 	if p.apiKey != "explicit-key" {
 		t.Errorf("apiKey = %q, want explicit-key", p.apiKey)
 	}
@@ -275,10 +150,16 @@ func TestOpenAICompatibleExplicitKeyOverridesEnv(t *testing.T) {
 
 // --- Embed support ---
 
-func TestEmbedSupportGLM(t *testing.T) {
+func TestGLMAnthropicProvider(t *testing.T) {
 	p := GLM("test-key")
-	if p.embedModel != "embedding-3" {
-		t.Errorf("embedModel = %q, want embedding-3", p.embedModel)
+	if p.Name() != "glm" {
+		t.Errorf("Name() = %q, want glm", p.Name())
+	}
+	if p.model != GLM4Dot7 {
+		t.Errorf("model = %q, want %q", p.model, GLM4Dot7)
+	}
+	if p.baseURL != "https://api.z.ai/api/anthropic" {
+		t.Errorf("baseURL = %q, want https://api.z.ai/api/anthropic", p.baseURL)
 	}
 }
 
@@ -289,9 +170,35 @@ func TestEmbedSupportLocal(t *testing.T) {
 	}
 }
 
-func TestEmbedSupportCustomModel(t *testing.T) {
-	p := GLM("test-key", WithEmbedModel("custom-embed"))
-	if p.embedModel != "custom-embed" {
-		t.Errorf("embedModel = %q, want custom-embed", p.embedModel)
+func TestKimiAnthropicProvider(t *testing.T) {
+	p := Kimi("test-key")
+	if p.Name() != "kimi" {
+		t.Errorf("Name() = %q, want kimi", p.Name())
+	}
+	if p.model != KimiK2_5 {
+		t.Errorf("model = %q, want %q", p.model, KimiK2_5)
+	}
+	if p.baseURL != "https://api.moonshot.ai/anthropic" {
+		t.Errorf("baseURL = %q, want https://api.moonshot.ai/anthropic", p.baseURL)
+	}
+}
+
+func TestMiniMaxAnthropicProvider(t *testing.T) {
+	p := MiniMax("test-key")
+	if p.Name() != "minimax" {
+		t.Errorf("Name() = %q, want minimax", p.Name())
+	}
+	if p.model != MiniMaxM2_7 {
+		t.Errorf("model = %q, want %q", p.model, MiniMaxM2_7)
+	}
+	if p.baseURL != "https://api.minimax.io/anthropic" {
+		t.Errorf("baseURL = %q, want https://api.minimax.io/anthropic", p.baseURL)
+	}
+}
+
+func TestGLMCustomModel(t *testing.T) {
+	p := GLM("test-key", WithAnthropicModel(GLM5))
+	if p.model != "glm-5" {
+		t.Errorf("model = %q, want glm-5", p.model)
 	}
 }

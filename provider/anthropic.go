@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"time"
 
@@ -17,30 +16,23 @@ import (
 )
 
 // wrapAnthropicError wraps Anthropic API errors with allm sentinel errors.
-// Maps HTTP status codes to allm errors:
-//   - 429 → ErrRateLimited
-//   - 529 → ErrOverloaded (Anthropic-specific: API overloaded)
-//   - 500-599 → ErrServerError
 func wrapAnthropicError(err error) error {
 	if err == nil {
 		return nil
 	}
 	var apiErr *anthropic.Error
 	if errors.As(err, &apiErr) {
-		switch {
-		case apiErr.StatusCode == http.StatusTooManyRequests:
-			return fmt.Errorf("%w: %w", allm.ErrRateLimited, err)
-		case apiErr.StatusCode == 529:
-			return fmt.Errorf("%w: %w", allm.ErrOverloaded, err)
-		case apiErr.StatusCode >= 500 && apiErr.StatusCode < 600:
-			return fmt.Errorf("%w: %w", allm.ErrServerError, err)
+		if wrapped := wrapHTTPStatusError(apiErr.StatusCode, err); wrapped != nil {
+			return wrapped
 		}
 	}
 	return err
 }
 
-// AnthropicProvider implements allm.Provider for Anthropic Claude.
+// AnthropicProvider implements allm.Provider for Anthropic Claude
+// and Anthropic-compatible APIs (e.g., GLM via api.z.ai/api/anthropic).
 type AnthropicProvider struct {
+	name        string // provider name (default: "anthropic")
 	apiKey      string
 	authToken   string // OAuth token (Claude Pro/Max subscription)
 	model       string
@@ -105,8 +97,9 @@ func WithAnthropicLogger(logger allm.Logger) AnthropicOption {
 //  2. apiKey parameter or ANTHROPIC_API_KEY env → API key (direct Anthropic API)
 func Anthropic(apiKey string, opts ...AnthropicOption) *AnthropicProvider {
 	p := &AnthropicProvider{
-		model:     "claude-sonnet-4-6",
-		maxTokens: 4096,
+		name:      "anthropic",
+		model:     "sonnet",
+		maxTokens: 200000,
 	}
 
 	for _, opt := range opts {
@@ -146,7 +139,7 @@ func Anthropic(apiKey string, opts ...AnthropicOption) *AnthropicProvider {
 
 // Name returns the provider name.
 func (p *AnthropicProvider) Name() string {
-	return "anthropic"
+	return p.name
 }
 
 // Available returns true if authentication is configured (API key or OAuth token).
@@ -231,10 +224,7 @@ func (p *AnthropicProvider) buildParams(req *allm.Request) (anthropic.MessageNew
 		}
 	}
 
-	model := p.model
-	if req.Model != "" {
-		model = req.Model
-	}
+	model := resolveModel(req.Model, p.model)
 
 	maxTokens := int64(p.maxTokens)
 	if req.MaxTokens > 0 {
@@ -290,7 +280,14 @@ func (p *AnthropicProvider) buildParams(req *allm.Request) (anthropic.MessageNew
 	_ = req.ComputerUse
 
 	// Extended thinking / reasoning
-	if req.Thinking != nil && req.Thinking.BudgetTokens > 0 {
+	// Effort level takes precedence — maps to thinking budget automatically.
+	// Explicit ThinkingConfig is used as fallback when effort is not set.
+	if req.Effort != "" {
+		budget := effortToBudget(req.Effort, maxTokens)
+		if budget > 0 {
+			params.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(budget))
+		}
+	} else if req.Thinking != nil && req.Thinking.BudgetTokens > 0 {
 		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(req.Thinking.BudgetTokens))
 	}
 
@@ -300,15 +297,11 @@ func (p *AnthropicProvider) buildParams(req *allm.Request) (anthropic.MessageNew
 // Complete sends a completion request.
 func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*allm.Response, error) {
 	start := time.Now()
-
-	model := p.model
-	if req.Model != "" {
-		model = req.Model
-	}
+	model := resolveModel(req.Model, p.model)
 
 	if p.logger != nil {
 		p.logger.Debug("provider complete",
-			"provider", "anthropic",
+			"provider", p.name,
 			"model", model,
 			"messages", len(req.Messages),
 		)
@@ -323,7 +316,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*a
 	if err != nil {
 		if p.logger != nil {
 			p.logger.Debug("provider complete failed",
-				"provider", "anthropic",
+				"provider", p.name,
 				"model", model,
 				"latency", time.Since(start),
 				"error", sanitizeProviderError(err),
@@ -337,7 +330,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*a
 	}
 
 	resp := &allm.Response{
-		Provider:     "anthropic",
+		Provider:     p.name,
 		Model:        model,
 		InputTokens:  int(message.Usage.InputTokens),
 		OutputTokens: int(message.Usage.OutputTokens),
@@ -376,7 +369,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*a
 
 	if p.logger != nil {
 		logArgs := []any{
-			"provider", "anthropic",
+			"provider", p.name,
 			"model", model,
 			"latency", resp.Latency,
 			"input_tokens", resp.InputTokens,
@@ -394,14 +387,11 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *allm.Request) (*a
 
 // CountTokens estimates input tokens for a request using Anthropic's count_tokens endpoint.
 func (p *AnthropicProvider) CountTokens(ctx context.Context, req *allm.Request) (*allm.TokenCount, error) {
-	model := p.model
-	if req.Model != "" {
-		model = req.Model
-	}
+	model := resolveModel(req.Model, p.model)
 
 	if p.logger != nil {
 		p.logger.Debug("provider count tokens",
-			"provider", "anthropic",
+			"provider", p.name,
 			"model", model,
 			"messages", len(req.Messages),
 		)
@@ -433,7 +423,7 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, req *allm.Request) 
 	if err != nil {
 		if p.logger != nil {
 			p.logger.Debug("provider count tokens failed",
-				"provider", "anthropic",
+				"provider", p.name,
 				"model", model,
 				"error", sanitizeProviderError(err),
 			)
@@ -443,7 +433,7 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, req *allm.Request) 
 
 	if p.logger != nil {
 		p.logger.Debug("provider count tokens done",
-			"provider", "anthropic",
+			"provider", p.name,
 			"model", model,
 			"input_tokens", result.InputTokens,
 		)
@@ -451,7 +441,7 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, req *allm.Request) 
 
 	return &allm.TokenCount{
 		InputTokens: int(result.InputTokens),
-		Provider:    "anthropic",
+		Provider:    p.name,
 		Model:       model,
 	}, nil
 }
@@ -468,7 +458,7 @@ func (p *AnthropicProvider) Models(ctx context.Context) ([]allm.Model, error) {
 		model := allm.Model{
 			ID:       m.ID,
 			Name:     m.DisplayName,
-			Provider: "anthropic",
+			Provider: p.name,
 		}
 		// Populate metadata if available
 		if m.MaxInputTokens > 0 {
@@ -498,14 +488,11 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *allm.Request) <-cha
 	go func() {
 		defer close(out)
 
-		model := p.model
-		if req.Model != "" {
-			model = req.Model
-		}
+		model := resolveModel(req.Model, p.model)
 
 		if p.logger != nil {
 			p.logger.Debug("provider stream",
-				"provider", "anthropic",
+				"provider", p.name,
 				"model", model,
 				"messages", len(req.Messages),
 			)
@@ -518,7 +505,7 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *allm.Request) <-cha
 		}
 
 		stream := p.client.Messages.NewStreaming(ctx, params)
-		defer stream.Close()
+		defer func() { _ = stream.Close() }()
 
 		var usage *allm.StreamUsage
 		// Track content block types (index -> type) to handle thinking vs text

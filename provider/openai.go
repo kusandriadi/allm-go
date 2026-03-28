@@ -311,7 +311,7 @@ func (p *OpenAIProvider) Speak(ctx context.Context, req *allm.SpeechRequest) (*a
 		}
 		return nil, wrapOpenAIError(err)
 	}
-	defer httpResp.Body.Close()
+	defer func() { _ = httpResp.Body.Close() }()
 
 	// Read audio data
 	var buf bytes.Buffer

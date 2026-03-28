@@ -27,9 +27,6 @@ var knownKeyPatterns = []KeyPattern{
 	{Provider: allm.OpenAI, Prefix: "sk-svcacct-", MinLen: 40},
 	{Provider: allm.OpenAI, Prefix: "sk-", MinLen: 40, MaxLen: 200},
 
-	// DeepSeek
-	{Provider: allm.DeepSeek, Prefix: "sk-", MinLen: 30},
-
 	// Moonshot / Kimi
 	{Provider: allm.Kimi, Prefix: "sk-", MinLen: 30},
 
@@ -103,12 +100,7 @@ func ValidateKeyFormat(provider allm.ProviderName, key string) error {
 			return fmt.Errorf("openai key looks too short (got %d chars)", len(key))
 		}
 
-	case allm.DeepSeek, allm.Kimi:
-		if len(key) < 20 {
-			return fmt.Errorf("%s key looks too short (got %d chars)", provider, len(key))
-		}
-
-	case allm.Gemini, allm.GLM, allm.Qwen, allm.MiniMax:
+	case allm.Kimi, allm.GLM, allm.MiniMax:
 		if len(key) < 10 {
 			return fmt.Errorf("%s key looks too short (got %d chars)", provider, len(key))
 		}

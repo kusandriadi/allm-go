@@ -18,7 +18,7 @@ func main() {
 	// --- Provider handles auth, Client handles behavior ---
 	client := allm.New(
 		provider.Anthropic(""), // reads ANTHROPIC_API_KEY from env
-		allm.WithModel(provider.AnthropicClaudeSonnet4_5),
+		allm.WithModel(provider.AnthropicSonnet),
 		allm.WithMaxTokens(4096),
 		allm.WithTimeout(30*time.Second),
 	)
@@ -32,7 +32,7 @@ func main() {
 		resp.Model, resp.InputTokens, resp.OutputTokens, resp.Latency)
 
 	// --- Switch to Opus (same API key, no new provider needed) ---
-	client.SetModel(provider.AnthropicClaudeOpus4_6)
+	client.SetModel(provider.AnthropicOpus)
 	resp, err = client.Complete(ctx, "Explain quantum computing in 2 sentences.")
 	if err != nil {
 		log.Fatal(err)
@@ -40,7 +40,7 @@ func main() {
 	fmt.Printf("[Opus 4.6] %s\n\n", resp.Content)
 
 	// --- Switch to Haiku for fast, cheap responses ---
-	client.SetModel(provider.AnthropicClaudeHaiku4_5)
+	client.SetModel(provider.AnthropicHaiku)
 	resp, err = client.Complete(ctx, "What is 2+2?")
 	if err != nil {
 		log.Fatal(err)
@@ -48,7 +48,7 @@ func main() {
 	fmt.Printf("[Haiku 4.5] %s\n\n", resp.Content)
 
 	// --- Back to Sonnet for remaining examples ---
-	client.SetModel(provider.AnthropicClaudeSonnet4_5)
+	client.SetModel(provider.AnthropicSonnet)
 
 	// --- Multi-turn conversation ---
 	resp, err = client.Chat(ctx, []allm.Message{

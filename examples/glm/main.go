@@ -1,4 +1,4 @@
-// Example: GLM (Zhipu AI) provider usage
+// Example: GLM (Zhipu AI) provider usage via Anthropic-compatible API
 package main
 
 import (
@@ -31,7 +31,7 @@ func main() {
 	// --- Use a specific model ---
 	clientGLM5 := allm.New(
 		provider.GLM("",
-			provider.WithDefaultModel(provider.GLM5),
+			provider.WithAnthropicModel(provider.GLM5),
 		),
 	)
 
@@ -75,27 +75,4 @@ func main() {
 		fmt.Print(chunk.Content)
 	}
 	fmt.Println()
-
-	// --- Embeddings ---
-	embClient := allm.New(
-		provider.GLM(""),
-		allm.WithEmbeddingModel(provider.GLMEmbedding3),
-	)
-
-	embResp, err := embClient.Embed(ctx, "Hello world")
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("\n[Embedding] dimensions: %d, tokens: %d\n",
-		len(embResp.Embeddings[0]), embResp.InputTokens)
-
-	// --- List available models ---
-	models, err := client.Models(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("\nAvailable GLM models (%d):\n", len(models))
-	for _, m := range models {
-		fmt.Printf("  - %s\n", m.ID)
-	}
 }

@@ -27,54 +27,10 @@ type providerRegistry struct {
 	defaultModel string
 	envKey       string
 	embedSupport bool
-	// visionSupport indicates the provider has models that support image input.
-	// Image data is passed via the shared convertToOpenAI function automatically.
-	visionSupport bool
 }
 
 // knownProviders is the registry of OpenAI-compatible providers.
 var knownProviders = map[allm.ProviderName]providerRegistry{
-	allm.DeepSeek: {
-		baseURL:      "https://api.deepseek.com/v1",
-		defaultModel: "deepseek-chat",
-		envKey:       "DEEPSEEK_API_KEY",
-		embedSupport: false,
-	},
-	allm.Gemini: {
-		baseURL:       "https://generativelanguage.googleapis.com/v1beta/openai/",
-		defaultModel:  "gemini-2.0-flash",
-		envKey:        "GEMINI_API_KEY",
-		embedSupport:  false,
-		visionSupport: true,
-	},
-	allm.GLM: {
-		baseURL:       "https://open.bigmodel.cn/api/paas/v4/",
-		defaultModel:  "glm-4-flash",
-		envKey:        "GLM_API_KEY",
-		embedSupport:  true,
-		visionSupport: true,
-	},
-	allm.Kimi: {
-		baseURL:       "https://api.moonshot.cn/v1",
-		defaultModel:  "moonshot-v1-8k",
-		envKey:        "MOONSHOT_API_KEY",
-		embedSupport:  false,
-		visionSupport: true,
-	},
-	allm.Qwen: {
-		baseURL:       "https://dashscope.aliyuncs.com/compatible-mode/v1",
-		defaultModel:  "qwen-plus",
-		envKey:        "DASHSCOPE_API_KEY",
-		embedSupport:  true,
-		visionSupport: true,
-	},
-	allm.MiniMax: {
-		baseURL:       "https://api.minimax.chat/v1",
-		defaultModel:  "MiniMax-Text-01",
-		envKey:        "MINIMAX_API_KEY",
-		embedSupport:  false,
-		visionSupport: false,
-	},
 	allm.Local: {
 		baseURL:      "http://localhost:11434/v1",
 		defaultModel: "llama3",
@@ -92,7 +48,7 @@ type OpenAICompatibleProvider struct {
 	maxTokens   int
 	temperature float64
 	client      openai.Client
-	embedModel  string // for embeddings (GLM, Local)
+	embedModel  string // for embeddings (Local, custom)
 	logger      allm.Logger
 }
 
@@ -137,7 +93,7 @@ func WithTemperature(t float64) CompatOption {
 	}
 }
 
-// WithEmbedModel sets the embedding model (for GLM, Local).
+// WithEmbedModel sets the embedding model (for Local, custom providers).
 func WithEmbedModel(model string) CompatOption {
 	return func(p *OpenAICompatibleProvider) {
 		p.embedModel = model
@@ -175,11 +131,7 @@ func OpenAICompatible(name allm.ProviderName, apiKey string, opts ...CompatOptio
 		}
 		// Set default embedding model for providers that support it
 		if reg.embedSupport {
-			if name == allm.GLM {
-				p.embedModel = "embedding-3"
-			} else if name == allm.Qwen {
-				p.embedModel = "text-embedding-v3"
-			} else if name == allm.Local {
+			if name == allm.Local {
 				p.embedModel = p.model // Local uses chat model for embeddings by default
 			}
 		}
@@ -310,7 +262,7 @@ func (p *OpenAICompatibleProvider) Models(ctx context.Context) ([]allm.Model, er
 }
 
 // Embed generates embeddings using the OpenAI-compatible API.
-// Supported by providers with embedSupport=true in registry (GLM, Local),
+// Supported by providers with embedSupport=true in registry (Local),
 // and by custom (unregistered) providers if an embedding model is configured.
 func (p *OpenAICompatibleProvider) Embed(ctx context.Context, req *allm.EmbedRequest) (*allm.EmbedResponse, error) {
 	// Known providers: check registry for embed support

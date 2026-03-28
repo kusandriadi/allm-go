@@ -1,31 +1,11 @@
 package provider
 
-// Anthropic Claude models.
-// Use these constants instead of hardcoding model ID strings.
-// For the latest models at runtime, use client.Models(ctx).
+// Anthropic Claude models — always points to the latest version.
 const (
-	// Claude Opus 4.6 - Most capable model
-	AnthropicClaudeOpus4_6 = "claude-opus-4-6"
-	// Claude Opus 4.5
-	AnthropicClaudeOpus4_5 = "claude-opus-4-5"
-	// Claude Opus 4.1
-	AnthropicClaudeOpus4_1 = "claude-opus-4-1-20250805"
-	// Claude Opus 4
-	AnthropicClaudeOpus4 = "claude-opus-4-20250514"
-	// Claude Sonnet 4.6
-	AnthropicClaudeSonnet4_6 = "claude-sonnet-4-6"
-	// Claude Sonnet 4.5
-	AnthropicClaudeSonnet4_5 = "claude-sonnet-4-5-20250929"
-	// Claude Sonnet 4
-	AnthropicClaudeSonnet4 = "claude-sonnet-4-20250514"
-	// Claude Sonnet 3.7
-	AnthropicClaudeSonnet3_7 = "claude-3-7-sonnet-20250219"
-	// Claude Haiku 4.5
-	AnthropicClaudeHaiku4_5 = "claude-haiku-4-5-20251001"
-	// Claude Haiku 3.5
-	AnthropicClaudeHaiku3_5 = "claude-3-5-haiku-20241022"
-	// Claude 3 Haiku (legacy)
-	AnthropicClaudeHaiku3 = "claude-3-haiku-20240307"
+	AnthropicOpus     = "opus"
+	AnthropicSonnet   = "sonnet"
+	AnthropicHaiku    = "haiku"
+	AnthropicOpusPlan = "opusplan" // Opus for planning, Sonnet for execution
 )
 
 // OpenAI GPT models.
@@ -66,36 +46,18 @@ const (
 	OpenAIO1 = "o1"
 )
 
-// DeepSeek models.
-const (
-	// DeepSeek Chat (V3) - General purpose
-	DeepSeekChat = "deepseek-chat"
-	// DeepSeek Reasoner (V3) - Chain-of-thought reasoning
-	DeepSeekReasoner = "deepseek-reasoner"
-)
-
 // GLM (Zhipu AI) models.
 const (
-	// GLM-5 - Latest and most capable
+	// GLM-5.1 - Latest and most capable
+	GLM5Dot1 = "glm-5.1"
+	// GLM-5
 	GLM5 = "glm-5"
-	// GLM-4-7
-	GLM4_7 = "glm-4-7"
-	// GLM-4-7 Flash
-	GLM4_7Flash = "glm-4-7-flash"
-	// GLM-4-6
-	GLM4_6 = "glm-4-6"
-	// GLM-4-5
-	GLM4_5 = "glm-4-5"
-	// GLM-4-5 Flash
-	GLM4_5Flash = "glm-4-5-flash"
-)
-
-// GLM (Zhipu AI) Embedding models.
-const (
-	// GLM Embedding 3
-	GLMEmbedding3 = "embedding-3"
-	// GLM Embedding 2
-	GLMEmbedding2 = "embedding-2"
+	// GLM-5 Turbo - Fast variant of GLM-5
+	GLM5Turbo = "glm-5-turbo"
+	// GLM-4.7
+	GLM4Dot7 = "glm-4.7"
+	// GLM-4.6
+	GLM4Dot6 = "glm-4.6"
 )
 
 // OpenAI Embedding models.
@@ -108,50 +70,20 @@ const (
 	OpenAITextEmbeddingAda002 = "text-embedding-ada-002"
 )
 
-// Gemini models.
-const (
-	// Gemini 2.0 Flash - Fast and efficient
-	GeminiFlash2_0 = "gemini-2.0-flash"
-	// Gemini 1.5 Flash
-	GeminiFlash1_5 = "gemini-1.5-flash"
-	// Gemini 1.5 Pro
-	GeminiPro1_5 = "gemini-1.5-pro"
-)
-
 // Kimi (Moonshot AI) models.
 const (
-	// Moonshot V1 8K context
-	KimiMoonshotV1_8K = "moonshot-v1-8k"
-	// Moonshot V1 32K context
-	KimiMoonshotV1_32K = "moonshot-v1-32k"
-	// Moonshot V1 128K context
-	KimiMoonshotV1_128K = "moonshot-v1-128k"
-)
-
-// Qwen (Alibaba DashScope) models.
-const (
-	// Qwen Max - Most capable
-	QwenMax = "qwen-max"
-	// Qwen Plus - Balanced performance
-	QwenPlus = "qwen-plus"
-	// Qwen Turbo - Fast and cost-effective
-	QwenTurbo = "qwen-turbo"
-	// Qwen Long - Extended context
-	QwenLong = "qwen-long"
-	// QwQ Plus - Reasoning model
-	QwQPlus = "qwq-plus"
-)
-
-// Qwen Embedding models.
-const (
-	// Qwen Text Embedding V3
-	QwenTextEmbeddingV3 = "text-embedding-v3"
+	KimiK2_5            = "kimi-k2.5"
+	KimiK2Preview       = "kimi-k2-0905-preview"
+	KimiK2TurboPreview  = "kimi-k2-turbo-preview"
+	KimiK2Thinking      = "kimi-k2-thinking"
+	KimiK2ThinkingTurbo = "kimi-k2-thinking-turbo"
 )
 
 // MiniMax models.
 const (
-	// MiniMax Text 01 - Latest text model
-	MiniMaxText01 = "MiniMax-Text-01"
-	// MiniMax Text 01 128K - Extended context
-	MiniMaxText01_128K = "MiniMax-Text-01-128K"
+	MiniMaxM2_7          = "MiniMax-M2.7"
+	MiniMaxM2_7HighSpeed = "MiniMax-M2.7-highspeed"
+	MiniMaxM2_5          = "MiniMax-M2.5"
+	MiniMaxM2_5HighSpeed = "MiniMax-M2.5-highspeed"
+	MiniMaxM2            = "MiniMax-M2"
 )

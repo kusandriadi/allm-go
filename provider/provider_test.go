@@ -20,11 +20,11 @@ func TestAnthropicNew(t *testing.T) {
 	if p.Name() != "anthropic" {
 		t.Errorf("expected 'anthropic', got %q", p.Name())
 	}
-	if p.model != "claude-sonnet-4-6" {
+	if p.model != "sonnet" {
 		t.Errorf("expected default model, got %q", p.model)
 	}
-	if p.maxTokens != 4096 {
-		t.Errorf("expected 4096, got %d", p.maxTokens)
+	if p.maxTokens != 200000 {
+		t.Errorf("expected 200000, got %d", p.maxTokens)
 	}
 }
 
@@ -542,6 +542,70 @@ func TestOpenAICompleteResponse(t *testing.T) {
 	}
 }
 
+func TestOpenAICompleteResponseWithReasoning(t *testing.T) {
+	// Simulate Ollama response with "reasoning" extra field by unmarshaling JSON
+	raw := `{
+		"id": "test",
+		"object": "chat.completion",
+		"choices": [{
+			"index": 0,
+			"message": {
+				"role": "assistant",
+				"content": "The answer is 4.",
+				"reasoning": "Let me think... 2 + 2 = 4."
+			},
+			"finish_reason": "stop"
+		}],
+		"usage": {"prompt_tokens": 10, "completion_tokens": 20}
+	}`
+
+	var completion openai.ChatCompletion
+	if err := json.Unmarshal([]byte(raw), &completion); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	resp, err := openaiCompleteResponse(&completion, "local", "qwen3.5", time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "The answer is 4." {
+		t.Errorf("content = %q, want 'The answer is 4.'", resp.Content)
+	}
+	if resp.Thinking != "Let me think... 2 + 2 = 4." {
+		t.Errorf("thinking = %q, want 'Let me think... 2 + 2 = 4.'", resp.Thinking)
+	}
+}
+
+func TestOpenAICompleteResponseWithoutReasoning(t *testing.T) {
+	// Standard response without reasoning field — Thinking should be empty
+	raw := `{
+		"id": "test",
+		"object": "chat.completion",
+		"choices": [{
+			"index": 0,
+			"message": {
+				"role": "assistant",
+				"content": "Hello!"
+			},
+			"finish_reason": "stop"
+		}],
+		"usage": {"prompt_tokens": 5, "completion_tokens": 3}
+	}`
+
+	var completion openai.ChatCompletion
+	if err := json.Unmarshal([]byte(raw), &completion); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	resp, err := openaiCompleteResponse(&completion, "local", "llama3", time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Thinking != "" {
+		t.Errorf("thinking should be empty, got %q", resp.Thinking)
+	}
+}
+
 func TestOpenAICompleteResponseEmpty(t *testing.T) {
 	completion := &openai.ChatCompletion{
 		Choices: []openai.ChatCompletionChoice{},
@@ -550,5 +614,80 @@ func TestOpenAICompleteResponseEmpty(t *testing.T) {
 	_, err := openaiCompleteResponse(completion, "test", "test-model", time.Now())
 	if !errors.Is(err, allm.ErrEmptyResponse) {
 		t.Errorf("expected ErrEmptyResponse, got %v", err)
+	}
+}
+
+// --- effortToBudget tests (Anthropic thinking budget) ---
+
+func TestEffortToBudget(t *testing.T) {
+	tests := []struct {
+		effort    string
+		maxTokens int64
+		want      int
+	}{
+		{allm.EffortLow, 200000, 1024},
+		{allm.EffortMedium, 200000, 8192},
+		{allm.EffortHigh, 200000, 32768},
+		{allm.EffortMax, 200000, 128000}, // 80% of 200k = 160k, capped at 128k
+		{allm.EffortMax, 50000, 40000},   // 80% of 50k = 40k
+		{allm.EffortMax, 10000, 32768},   // 80% of 10k = 8k, floor at 32768
+		{"", 200000, 0},                  // empty returns 0
+		{"unknown", 200000, 0},           // unknown returns 0
+	}
+	for _, tc := range tests {
+		got := effortToBudget(tc.effort, tc.maxTokens)
+		if got != tc.want {
+			t.Errorf("effortToBudget(%q, %d) = %d, want %d", tc.effort, tc.maxTokens, got, tc.want)
+		}
+	}
+}
+
+// --- effortToReasoningEffort tests ---
+
+func TestEffortToReasoningEffort(t *testing.T) {
+	tests := []struct {
+		effort string
+		want   string
+	}{
+		{allm.EffortLow, "low"},
+		{allm.EffortMedium, "medium"},
+		{allm.EffortHigh, "high"},
+		{allm.EffortMax, "high"}, // max maps to high for OpenAI-compatible
+		{"custom", "custom"},     // unknown passes through
+	}
+	for _, tc := range tests {
+		got := string(effortToReasoningEffort(tc.effort))
+		if got != tc.want {
+			t.Errorf("effortToReasoningEffort(%q) = %q, want %q", tc.effort, got, tc.want)
+		}
+	}
+}
+
+// --- openaiChatParams effort tests ---
+
+func TestOpenAIChatParamsWithEffort(t *testing.T) {
+	msgs, _ := convertToOpenAI([]allm.Message{
+		{Role: allm.RoleUser, Content: "hello"},
+	})
+	req := &allm.Request{
+		Messages: []allm.Message{{Role: allm.RoleUser, Content: "hello"}},
+		Effort:   allm.EffortHigh,
+	}
+	params := openaiChatParams(msgs, "qwen3.5", 4096, 0.7, req)
+	if params.ReasoningEffort != "high" {
+		t.Errorf("ReasoningEffort = %q, want 'high'", params.ReasoningEffort)
+	}
+}
+
+func TestOpenAIChatParamsWithoutEffort(t *testing.T) {
+	msgs, _ := convertToOpenAI([]allm.Message{
+		{Role: allm.RoleUser, Content: "hello"},
+	})
+	req := &allm.Request{
+		Messages: []allm.Message{{Role: allm.RoleUser, Content: "hello"}},
+	}
+	params := openaiChatParams(msgs, "qwen3.5", 4096, 0.7, req)
+	if params.ReasoningEffort != "" {
+		t.Errorf("ReasoningEffort = %q, want empty", params.ReasoningEffort)
 	}
 }

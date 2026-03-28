@@ -18,7 +18,7 @@ func main() {
 	// Provider = auth only, Client = behavior
 	client := allm.New(
 		provider.Anthropic(""), // reads ANTHROPIC_API_KEY from env
-		allm.WithModel(provider.AnthropicClaudeSonnet4_5),
+		allm.WithModel(provider.AnthropicSonnet),
 		allm.WithMaxTokens(4096),
 		allm.WithTemperature(0.7),
 		allm.WithTimeout(30*time.Second),
@@ -49,7 +49,7 @@ func main() {
 
 	// Switch model at runtime (same API key, no new provider needed)
 	fmt.Println("=== Switch Model ===")
-	client.SetModel(provider.AnthropicClaudeHaiku4_5)
+	client.SetModel(provider.AnthropicHaiku)
 	resp, err = client.Complete(ctx, "What is 1+1?")
 	if err != nil {
 		log.Fatal(err)
@@ -57,7 +57,7 @@ func main() {
 	fmt.Printf("[Haiku] %s (model: %s)\n\n", resp.Content, resp.Model)
 
 	// Streaming
-	client.SetModel(provider.AnthropicClaudeSonnet4_5)
+	client.SetModel(provider.AnthropicSonnet)
 	fmt.Println("=== Streaming ===")
 	fmt.Print("Response: ")
 	for chunk := range client.Stream(ctx, []allm.Message{
@@ -73,7 +73,7 @@ func main() {
 	// Stream to file
 	fmt.Println("\n=== Stream to File ===")
 	f, _ := os.CreateTemp("", "allm-*.txt")
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 
 	err = client.StreamToWriter(ctx, []allm.Message{
 		{Role: allm.RoleUser, Content: "Write a haiku about programming."},

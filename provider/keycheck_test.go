@@ -29,25 +29,13 @@ func TestValidateKeyFormat(t *testing.T) {
 		{"bad openai prefix", allm.OpenAI, "bad-" + strings.Repeat("x", 40), true},
 		{"short openai", allm.OpenAI, "sk-short", true},
 
-		// DeepSeek
-		{"valid deepseek", allm.DeepSeek, strings.Repeat("x", 30), false},
-		{"short deepseek", allm.DeepSeek, "short", true},
-
 		// Kimi
 		{"valid kimi", allm.Kimi, strings.Repeat("x", 30), false},
 		{"short kimi", allm.Kimi, "short", true},
 
-		// Qwen
-		{"valid qwen", allm.Qwen, strings.Repeat("x", 20), false},
-		{"short qwen", allm.Qwen, "tiny", true},
-
 		// MiniMax
 		{"valid minimax", allm.MiniMax, strings.Repeat("x", 20), false},
 		{"short minimax", allm.MiniMax, "tiny", true},
-
-		// Gemini
-		{"valid gemini", allm.Gemini, strings.Repeat("x", 20), false},
-		{"short gemini", allm.Gemini, "tiny", true},
 
 		// GLM
 		{"valid glm", allm.GLM, strings.Repeat("x", 20), false},
