@@ -27,6 +27,9 @@ type ClaudeCLIProvider struct {
 	maxBudget       float64  // --max-budget-usd per request (0 = unlimited)
 	appendPrompt    string   // --append-system-prompt (optional)
 	allowedTools    []string // --tools whitelist (empty = disable all tools)
+	workDir         string   // working directory for the CLI process (empty = inherit)
+	sessionPersist  bool     // when true, omit --no-session-persistence (enables multi-turn)
+	continueSession bool     // when true, add --continue (resume previous session)
 	logger          allm.Logger
 }
 
@@ -95,6 +98,29 @@ func WithCLIAllowedTools(tools []string) CLIOption {
 func WithCLILogger(logger allm.Logger) CLIOption {
 	return func(p *ClaudeCLIProvider) {
 		p.logger = logger
+	}
+}
+
+// WithCLIWorkDir sets the working directory for the CLI process.
+// When empty (default), the process inherits the current working directory.
+func WithCLIWorkDir(dir string) CLIOption {
+	return func(p *ClaudeCLIProvider) {
+		p.workDir = dir
+	}
+}
+
+// WithCLISessionPersist enables session persistence.
+// When true, the --no-session-persistence flag is omitted, allowing multi-turn sessions.
+func WithCLISessionPersist(enabled bool) CLIOption {
+	return func(p *ClaudeCLIProvider) {
+		p.sessionPersist = enabled
+	}
+}
+
+// WithCLIContinue enables the --continue flag to resume a previous session.
+func WithCLIContinue(enabled bool) CLIOption {
+	return func(p *ClaudeCLIProvider) {
+		p.continueSession = enabled
 	}
 }
 
@@ -174,6 +200,24 @@ func (p *ClaudeCLIProvider) SetAppendPrompt(prompt string) { p.appendPrompt = pr
 // AppendPrompt returns the current appended system prompt.
 func (p *ClaudeCLIProvider) AppendPrompt() string { return p.appendPrompt }
 
+// SetWorkDir sets the working directory at runtime.
+func (p *ClaudeCLIProvider) SetWorkDir(dir string) { p.workDir = dir }
+
+// WorkDir returns the current working directory.
+func (p *ClaudeCLIProvider) WorkDir() string { return p.workDir }
+
+// SetContinue enables or disables the --continue flag at runtime.
+func (p *ClaudeCLIProvider) SetContinue(enabled bool) { p.continueSession = enabled }
+
+// Continue returns whether --continue is enabled.
+func (p *ClaudeCLIProvider) Continue() bool { return p.continueSession }
+
+// SetSessionPersist enables or disables session persistence at runtime.
+func (p *ClaudeCLIProvider) SetSessionPersist(enabled bool) { p.sessionPersist = enabled }
+
+// SessionPersist returns whether session persistence is enabled.
+func (p *ClaudeCLIProvider) SessionPersist() bool { return p.sessionPersist }
+
 // cliResult represents the JSON output from claude CLI (--output-format json).
 type cliResult struct {
 	IsError bool   `json:"is_error"`
@@ -191,15 +235,25 @@ type cliStreamMessage struct {
 	Type    string `json:"type"`
 	Message struct {
 		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type  string          `json:"type"`
+			Text  string          `json:"text"`
+			Name  string          `json:"name,omitempty"`  // tool_use: tool name
+			Input json.RawMessage `json:"input,omitempty"` // tool_use: tool input
 		} `json:"content"`
 	} `json:"message"`
 }
 
 // buildArgs constructs claude CLI arguments from a request.
 func (p *ClaudeCLIProvider) buildArgs(req *allm.Request, outputFormat string) (args []string, prompt string) {
-	args = []string{"-p", "--output-format", outputFormat, "--no-session-persistence"}
+	args = []string{"-p", "--output-format", outputFormat}
+
+	if !p.sessionPersist {
+		args = append(args, "--no-session-persistence")
+	}
+
+	if p.continueSession {
+		args = append(args, "--continue")
+	}
 
 	if p.skipPermissions {
 		args = append(args, "--dangerously-skip-permissions")
@@ -314,6 +368,9 @@ func (p *ClaudeCLIProvider) Complete(ctx context.Context, req *allm.Request) (*a
 	cmd := exec.CommandContext(ctx, p.cliPath, args...)
 	cmd.Stdin = strings.NewReader(prompt) // prompt not logged (may contain PII)
 	cmd.Env = os.Environ()
+	if p.workDir != "" {
+		cmd.Dir = p.workDir
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -374,6 +431,9 @@ func (p *ClaudeCLIProvider) Stream(ctx context.Context, req *allm.Request) <-cha
 		cmd := exec.CommandContext(ctx, p.cliPath, args...)
 		cmd.Stdin = strings.NewReader(prompt)
 		cmd.Env = os.Environ()
+		if p.workDir != "" {
+			cmd.Dir = p.workDir
+		}
 
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
@@ -414,8 +474,18 @@ func (p *ClaudeCLIProvider) Stream(ctx context.Context, req *allm.Request) <-cha
 					continue
 				}
 				for _, block := range msg.Message.Content {
-					if block.Type == "text" && block.Text != "" {
-						out <- allm.StreamChunk{Content: block.Text}
+					switch block.Type {
+					case "text":
+						if block.Text != "" {
+							out <- allm.StreamChunk{Content: block.Text}
+						}
+					case "tool_use":
+						if block.Name != "" {
+							out <- allm.StreamChunk{ToolUse: &allm.StreamToolUse{
+								Name:  block.Name,
+								Input: block.Input,
+							}}
+						}
 					}
 				}
 			case "result":

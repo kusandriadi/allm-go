@@ -366,13 +366,20 @@ type StreamUsage struct {
 	OutputTokens int // Output tokens
 }
 
+// StreamToolUse represents a tool-use event in a streamed response.
+type StreamToolUse struct {
+	Name  string          // Tool name (e.g., "Read", "Edit", "Bash")
+	Input json.RawMessage // Tool input as raw JSON
+}
+
 // StreamChunk represents a chunk of streamed response.
 type StreamChunk struct {
-	Content  string       // Partial content
-	Thinking string       // Thinking/reasoning content (partial, for streaming, Anthropic only)
-	Done     bool         // True if this is the final chunk
-	Error    error        // Non-nil if streaming failed
-	Usage    *StreamUsage // Token usage (non-nil only in final chunks, provider-dependent)
+	Content  string         // Partial content
+	Thinking string         // Thinking/reasoning content (partial, for streaming, Anthropic only)
+	ToolUse  *StreamToolUse // Tool-use event (name + input, nil for non-tool chunks)
+	Done     bool           // True if this is the final chunk
+	Error    error          // Non-nil if streaming failed
+	Usage    *StreamUsage   // Token usage (non-nil only in final chunks, provider-dependent)
 }
 
 // EmbedRequest contains parameters for an embedding request.

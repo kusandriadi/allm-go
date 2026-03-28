@@ -256,6 +256,104 @@ func TestTruncateErr(t *testing.T) {
 	}
 }
 
+func TestClaudeCLIWorkDir(t *testing.T) {
+	p := ClaudeCLI(WithCLIWorkDir("/tmp/test"))
+	if p.workDir != "/tmp/test" {
+		t.Errorf("expected workDir '/tmp/test', got %q", p.workDir)
+	}
+	if p.WorkDir() != "/tmp/test" {
+		t.Error("WorkDir() getter mismatch")
+	}
+
+	p.SetWorkDir("/home/user")
+	if p.WorkDir() != "/home/user" {
+		t.Errorf("expected workDir '/home/user' after SetWorkDir, got %q", p.WorkDir())
+	}
+}
+
+func TestClaudeCLISessionPersist(t *testing.T) {
+	// Default: session persistence disabled (--no-session-persistence added)
+	p := ClaudeCLI()
+	req := &allm.Request{
+		Messages: []allm.Message{
+			{Role: allm.RoleUser, Content: "Hi"},
+		},
+	}
+	args, _ := p.buildArgs(req, "json")
+
+	hasFlag := func(args []string, flag string) bool {
+		for _, a := range args {
+			if a == flag {
+				return true
+			}
+		}
+		return false
+	}
+
+	if !hasFlag(args, "--no-session-persistence") {
+		t.Error("default should include --no-session-persistence")
+	}
+	if hasFlag(args, "--continue") {
+		t.Error("default should not include --continue")
+	}
+
+	// Enable session persistence
+	p2 := ClaudeCLI(WithCLISessionPersist(true))
+	args2, _ := p2.buildArgs(req, "json")
+
+	if hasFlag(args2, "--no-session-persistence") {
+		t.Error("should NOT include --no-session-persistence when session persist enabled")
+	}
+
+	// Runtime setter
+	p2.SetSessionPersist(false)
+	if p2.SessionPersist() {
+		t.Error("expected SessionPersist() false after SetSessionPersist(false)")
+	}
+}
+
+func TestClaudeCLIContinue(t *testing.T) {
+	p := ClaudeCLI(WithCLISessionPersist(true), WithCLIContinue(true))
+	req := &allm.Request{
+		Messages: []allm.Message{
+			{Role: allm.RoleUser, Content: "continue"},
+		},
+	}
+	args, _ := p.buildArgs(req, "json")
+
+	hasContinue := false
+	hasNoSession := false
+	for _, a := range args {
+		if a == "--continue" {
+			hasContinue = true
+		}
+		if a == "--no-session-persistence" {
+			hasNoSession = true
+		}
+	}
+
+	if !hasContinue {
+		t.Error("expected --continue flag when continue enabled")
+	}
+	if hasNoSession {
+		t.Error("should not have --no-session-persistence when session persist enabled")
+	}
+
+	// Runtime setter
+	p.SetContinue(false)
+	if p.Continue() {
+		t.Error("expected Continue() false after SetContinue(false)")
+	}
+}
+
+func TestClaudeCLIWorkDirDefault(t *testing.T) {
+	// Default: no workDir set
+	p := ClaudeCLI()
+	if p.WorkDir() != "" {
+		t.Errorf("expected empty default workDir, got %q", p.WorkDir())
+	}
+}
+
 func TestClaudeCLIModels(t *testing.T) {
 	p := ClaudeCLI()
 	models, err := p.Models(context.Background())
